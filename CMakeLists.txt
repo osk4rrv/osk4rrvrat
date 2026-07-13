@@ -44,7 +44,7 @@ if(MSVC)
 endif()
 
 add_executable(payload WIN32 src/payload.cpp)
-target_link_libraries(payload PRIVATE winhttp iphlpapi ws2_32 gdiplus winmm vfw32 shell32 shlwapi crypt32 bcrypt ole32)
+target_link_libraries(payload PRIVATE ws2_32 gdiplus winmm vfw32 shell32 shlwapi crypt32 bcrypt ole32)
 target_compile_definitions(payload PRIVATE UNICODE _UNICODE)
 if(MSVC)
     target_compile_options(payload PRIVATE /W3 /utf-8)
