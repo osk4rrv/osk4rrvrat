@@ -32,11 +32,11 @@ We provide much functions like Anti-VT Bypass:
 ---
 
 ## Requirements
-| **Windows 10/11** x64 | Target platform |
+- **Windows 10/11** x64 | This is the target platfrom. u cant run my project on Linux or MacOS
 
 For developers (optional)
-| **Visual Studio 2022** | C++ desktop workload + MSVC |
-| **CMake ≥ 3.20** | Generator: Visual Studio 17 2022 |
+- **Visual Studio 2022** | Edit etc.
+- **CMake ≥ 3.20** | Project Builder (NEEDS VS22 C++ TOOLS)
 
 ---
 
