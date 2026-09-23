@@ -1,2 +1,6 @@
 ﻿.agents/
-result/
+.workbuddy-ai/
+CMakeLists.txt
+build/
+.gitignore
+.kilo/

@@ -22,7 +22,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{894031EF-C20E-3A30-89A8-88B25EB8A499}</ProjectGuid>
+    <ProjectGuid>{60DD66DD-E9B8-351B-9DE1-8F2CCB796E66}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <Platform>x64</Platform>
@@ -59,25 +59,25 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\Debug\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\Debug\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">OSK4RRV-RAT.dir\Debug\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">OSK4RRV-RAT</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\Release\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\Release\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">OSK4RRV-RAT.dir\Release\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">OSK4RRV-RAT</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\MinSizeRel\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\MinSizeRel\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">OSK4RRV-RAT.dir\MinSizeRel\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">OSK4RRV-RAT</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\RelWithDebInfo\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\RelWithDebInfo\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">OSK4RRV-RAT.dir\RelWithDebInfo\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">OSK4RRV-RAT</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
@@ -86,7 +86,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -113,10 +113,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;UNICODE;_UNICODE;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -128,17 +128,14 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
-      <EnableUAC>true</EnableUAC>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>C:/Users/oziet/Downloads/osk4rrvrat/build/Debug/OSK4RRV-RAT.lib</ImportLibrary>
+      <ImportLibrary>C:/Users/oskar/Downloads/osk4rrvrat-main/build/Debug/OSK4RRV-RAT.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>C:/Users/oziet/Downloads/osk4rrvrat/build/Debug/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>C:/Users/oskar/Downloads/osk4rrvrat-main/build/Debug/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
-      <UACUIAccess>false</UACUIAccess>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -146,7 +143,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -174,10 +171,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UNICODE;_UNICODE;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -189,17 +186,14 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
-      <EnableUAC>true</EnableUAC>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>C:/Users/oziet/Downloads/osk4rrvrat/build/Release/OSK4RRV-RAT.lib</ImportLibrary>
+      <ImportLibrary>C:/Users/oskar/Downloads/osk4rrvrat-main/build/Release/OSK4RRV-RAT.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>C:/Users/oziet/Downloads/osk4rrvrat/build/Release/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>C:/Users/oskar/Downloads/osk4rrvrat-main/build/Release/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
-      <UACUIAccess>false</UACUIAccess>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -207,7 +201,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -235,10 +229,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UNICODE;_UNICODE;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -250,17 +244,14 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
-      <EnableUAC>true</EnableUAC>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>C:/Users/oziet/Downloads/osk4rrvrat/build/MinSizeRel/OSK4RRV-RAT.lib</ImportLibrary>
+      <ImportLibrary>C:/Users/oskar/Downloads/osk4rrvrat-main/build/MinSizeRel/OSK4RRV-RAT.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>C:/Users/oziet/Downloads/osk4rrvrat/build/MinSizeRel/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>C:/Users/oskar/Downloads/osk4rrvrat-main/build/MinSizeRel/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
-      <UACUIAccess>false</UACUIAccess>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -268,7 +259,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -295,10 +286,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UNICODE;_UNICODE;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\oziet\Downloads\osk4rrvrat\src;C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\oskar\Downloads\osk4rrvrat-main\src;C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -310,28 +301,25 @@
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
-      <EnableUAC>true</EnableUAC>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>C:/Users/oziet/Downloads/osk4rrvrat/build/RelWithDebInfo/OSK4RRV-RAT.lib</ImportLibrary>
+      <ImportLibrary>C:/Users/oskar/Downloads/osk4rrvrat-main/build/RelWithDebInfo/OSK4RRV-RAT.lib</ImportLibrary>
       <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>C:/Users/oziet/Downloads/osk4rrvrat/build/RelWithDebInfo/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
+      <ProgramDataBaseFile>C:/Users/oskar/Downloads/osk4rrvrat-main/build/RelWithDebInfo/OSK4RRV-RAT.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
       <SubSystem>Windows</SubSystem>
-      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
-      <UACUIAccess>false</UACUIAccess>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CustomBuild Include="C:\Users\oziet\Downloads\osk4rrvrat\CMakeLists.txt">
+    <CustomBuild Include="C:\Users\oskar\Downloads\osk4rrvrat-main\CMakeLists.txt">
       <UseUtf8Encoding>Always</UseUtf8Encoding>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/oziet/Downloads/osk4rrvrat/CMakeLists.txt</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/oskar/Downloads/osk4rrvrat-main/CMakeLists.txt</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/oziet/Downloads/osk4rrvrat -BC:/Users/oziet/Downloads/osk4rrvrat/build --check-stamp-file C:/Users/oziet/Downloads/osk4rrvrat/build/CMakeFiles/generate.stamp
+C:\cmake\bin\cmake.exe -SC:/Users/oskar/Downloads/osk4rrvrat-main -BC:/Users/oskar/Downloads/osk4rrvrat-main/build --check-stamp-file C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -339,12 +327,12 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeCXXCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeRCCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\generate.stamp</Outputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeCXXCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeRCCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/oziet/Downloads/osk4rrvrat/CMakeLists.txt</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/oskar/Downloads/osk4rrvrat-main/CMakeLists.txt</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/oziet/Downloads/osk4rrvrat -BC:/Users/oziet/Downloads/osk4rrvrat/build --check-stamp-file C:/Users/oziet/Downloads/osk4rrvrat/build/CMakeFiles/generate.stamp
+C:\cmake\bin\cmake.exe -SC:/Users/oskar/Downloads/osk4rrvrat-main -BC:/Users/oskar/Downloads/osk4rrvrat-main/build --check-stamp-file C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -352,12 +340,12 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeCXXCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeRCCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\generate.stamp</Outputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeCXXCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeRCCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/oziet/Downloads/osk4rrvrat/CMakeLists.txt</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/oskar/Downloads/osk4rrvrat-main/CMakeLists.txt</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/oziet/Downloads/osk4rrvrat -BC:/Users/oziet/Downloads/osk4rrvrat/build --check-stamp-file C:/Users/oziet/Downloads/osk4rrvrat/build/CMakeFiles/generate.stamp
+C:\cmake\bin\cmake.exe -SC:/Users/oskar/Downloads/osk4rrvrat-main -BC:/Users/oskar/Downloads/osk4rrvrat-main/build --check-stamp-file C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -365,12 +353,12 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeCXXCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeRCCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\generate.stamp</Outputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeCXXCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeRCCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/oziet/Downloads/osk4rrvrat/CMakeLists.txt</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/oskar/Downloads/osk4rrvrat-main/CMakeLists.txt</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/oziet/Downloads/osk4rrvrat -BC:/Users/oziet/Downloads/osk4rrvrat/build --check-stamp-file C:/Users/oziet/Downloads/osk4rrvrat/build/CMakeFiles/generate.stamp
+C:\cmake\bin\cmake.exe -SC:/Users/oskar/Downloads/osk4rrvrat-main -BC:/Users/oskar/Downloads/osk4rrvrat-main/build --check-stamp-file C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -378,26 +366,26 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 exit /b %1
 :cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeCXXCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeRCCompiler.cmake;C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\4.4.0-rc3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\oziet\Downloads\osk4rrvrat\build\CMakeFiles\generate.stamp</Outputs>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeCXXCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeRCCompiler.cmake;C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\4.4.3\CMakeSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\cmake\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\cmake\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\oskar\Downloads\osk4rrvrat-main\build\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\main.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\rat.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui\imgui.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui\imgui_draw.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui\imgui_tables.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui\imgui_widgets.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui\imgui_demo.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui\imgui_impl_win32.cpp" />
-    <ClCompile Include="C:\Users\oziet\Downloads\osk4rrvrat\src\Dear Imgui\imgui_impl_dx11.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\main.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\rat.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui\imgui.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui\imgui_draw.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui\imgui_tables.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui\imgui_widgets.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui\imgui_demo.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui\imgui_impl_win32.cpp" />
+    <ClCompile Include="C:\Users\oskar\Downloads\osk4rrvrat-main\src\Dear Imgui\imgui_impl_dx11.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>
-    <ProjectReference Include="C:\Users\oziet\Downloads\osk4rrvrat\build\ZERO_CHECK.vcxproj">
-      <Project>{D94EFB99-7A85-3CED-8F64-049DD0CED3F4}</Project>
+    <ProjectReference Include="C:\Users\oskar\Downloads\osk4rrvrat-main\build\ZERO_CHECK.vcxproj">
+      <Project>{929D9DC3-3A50-32E2-9979-906E2A93F403}</Project>
       <Name>ZERO_CHECK</Name>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>

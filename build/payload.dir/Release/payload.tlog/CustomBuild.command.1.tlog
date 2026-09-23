@@ -1,6 +1,6 @@
-^C:\USERS\OZIET\DOWNLOADS\OSK4RRVRAT\CMAKELISTS.TXT
+^C:\USERS\OSKAR\DOWNLOADS\OSK4RRVRAT-MAIN\CMAKELISTS.TXT
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/oziet/Downloads/osk4rrvrat -BC:/Users/oziet/Downloads/osk4rrvrat/build --check-stamp-file C:/Users/oziet/Downloads/osk4rrvrat/build/CMakeFiles/generate.stamp
+C:\cmake\bin\cmake.exe -SC:/Users/oskar/Downloads/osk4rrvrat-main -BC:/Users/oskar/Downloads/osk4rrvrat-main/build --check-stamp-file C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
