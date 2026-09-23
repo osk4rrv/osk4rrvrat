@@ -1,5 +1,0 @@
-C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/OSK4RRV-RAT.dir
-C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/payload.dir
-C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/binder.dir
-C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/oskar/Downloads/osk4rrvrat-main/build/CMakeFiles/ZERO_CHECK.dir
